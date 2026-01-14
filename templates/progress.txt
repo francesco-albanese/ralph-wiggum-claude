@@ -1,0 +1,10 @@
+# Ralph Progress Log
+Started: YYYY-MM-DD
+
+## Codebase Patterns
+- (Add patterns discovered during implementation)
+
+## Key Files
+- (List important files for context)
+
+---
