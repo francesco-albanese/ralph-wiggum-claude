@@ -15,9 +15,22 @@ done
 
 if [[ ! -f "$SCRIPT_DIR/prompt.md" ]]; then
   echo "Error: $SCRIPT_DIR/prompt.md not found"
-  echo "Create scripts/ralph/ directory with prompt.md, prd.json, progress.txt"
+  echo "Run ralph-bootstrap first to create scripts/ralph/prompt.md"
   exit 1
 fi
+
+JQ_FILTER='
+  if .type == "assistant" then
+    (.message.content[] |
+      if .type == "text" then "💬 \(.text)"
+      elif .type == "tool_use" then "🔧 \(.name): \(.input | tostring)"
+      else empty end)
+  elif .type == "user" then
+    (.message.content[]? | select(.type == "tool_result") |
+      "  ↩ \(if (.content | type) == "string" then .content else (.content[]?.text // "") end)")
+  elif .type == "result" then
+    "✅ Done | turns=\(.num_turns) cost=$\(.total_cost_usd | tostring) time=\((.duration_ms / 1000 * 10 | floor) / 10)s"
+  else empty end'
 
 echo "Starting Ralph (AFK mode)"
 echo "Max iterations: $MAX_ITERATIONS"
@@ -30,11 +43,16 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   if $USE_DOCKER; then
     OUTPUT=$(docker sandbox run claude -p "$(cat "$SCRIPT_DIR/prompt.md")" 2>&1 | tee /dev/stderr) || true
   else
-    OUTPUT=$(cat "$SCRIPT_DIR/prompt.md" | claude --permission-mode acceptEdits 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$(claude -p "$(cat "$SCRIPT_DIR/prompt.md")" \
+      --dangerously-skip-permissions \
+      --output-format stream-json \
+      --verbose 2>/dev/null \
+    | jq -r "$JQ_FILTER" \
+    | tee /dev/stderr) || true
   fi
 
   if [[ "$OUTPUT" == *"<promise>COMPLETE</promise>"* ]]; then
-    echo "PRD complete after $i iterations, exiting."
+    echo "All tasks complete after $i iterations, exiting."
     exit 0
   fi
 
