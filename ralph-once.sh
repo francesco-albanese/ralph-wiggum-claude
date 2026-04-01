@@ -2,6 +2,24 @@
 set -e
 
 SCRIPT_DIR="scripts/ralph"
+MILESTONE=""
+EXTRA_INSTRUCTIONS=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --milestone)
+      MILESTONE="$2"
+      shift 2
+      ;;
+    --instructions)
+      EXTRA_INSTRUCTIONS="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 
 if [[ ! -f "$SCRIPT_DIR/prompt.md" ]]; then
   echo "Error: $SCRIPT_DIR/prompt.md not found"
@@ -9,9 +27,37 @@ if [[ ! -f "$SCRIPT_DIR/prompt.md" ]]; then
   exit 1
 fi
 
-echo "Running single Ralph iteration (HITL mode)..."
+PROMPT="$(cat "$SCRIPT_DIR/prompt.md")"
 
-claude -p "$(cat "$SCRIPT_DIR/prompt.md")" \
+if [[ -n "$MILESTONE" ]]; then
+  PROMPT="$PROMPT
+
+## Milestone Scope
+
+You are scoped to the milestone: \"$MILESTONE\"
+
+When listing tasks, ALWAYS include the milestone filter:
+\`\`\`bash
+gh issue list --label \"task\" --milestone \"$MILESTONE\" --search '-label:\"in-progress\" -label:done'
+\`\`\`
+
+Do NOT pick up tasks from other milestones. If a task has no milestone or belongs to a different milestone, skip it.
+When updating the progress log, note that you worked on milestone \"$MILESTONE\"."
+fi
+
+if [[ -n "$EXTRA_INSTRUCTIONS" ]]; then
+  PROMPT="$PROMPT
+
+## Additional Instructions
+
+$EXTRA_INSTRUCTIONS"
+fi
+
+echo "Running single Ralph iteration (HITL mode)..."
+[[ -n "$MILESTONE" ]] && echo "Milestone: $MILESTONE"
+[[ -n "$EXTRA_INSTRUCTIONS" ]] && echo "Extra instructions: (provided)"
+
+claude -p "$PROMPT" \
   --permission-mode acceptEdits \
   --output-format stream-json \
   --verbose 2>/dev/null \
