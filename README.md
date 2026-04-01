@@ -80,6 +80,26 @@ afk-ralph 25
 afk-ralph 25 --docker
 ```
 
+### Milestone scoping
+
+Scope agents to a specific GitHub milestone to prevent collisions when running multiple loops:
+
+```bash
+# Scope to a milestone
+afk-ralph 10 --milestone "Sprint 3"
+ralph-once --milestone "Sprint 3"
+
+# Add extra instructions
+afk-ralph 10 --instructions "Focus on backend tasks only"
+
+# Combine both
+afk-ralph 10 --milestone "Backend v2" --instructions "Skip legacy/ files"
+
+# Run multiple agents on different milestones
+afk-ralph 10 --milestone "Backend v2" &
+afk-ralph 10 --milestone "Frontend v2" &
+```
+
 ## Files Structure
 
 ```text

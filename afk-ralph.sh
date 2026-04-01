@@ -2,16 +2,31 @@
 set -e
 
 SCRIPT_DIR="scripts/ralph"
-MAX_ITERATIONS=${1:-10}
+MAX_ITERATIONS=10
 USE_DOCKER=false
+MILESTONE=""
+EXTRA_INSTRUCTIONS=""
 
-# Parse --docker flag
-for arg in "$@"; do
-  [[ "$arg" == "--docker" ]] && USE_DOCKER=true
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --docker)
+      USE_DOCKER=true
+      shift
+      ;;
+    --milestone)
+      MILESTONE="$2"
+      shift 2
+      ;;
+    --instructions)
+      EXTRA_INSTRUCTIONS="$2"
+      shift 2
+      ;;
+    *)
+      [[ "$1" =~ ^[0-9]+$ ]] && MAX_ITERATIONS="$1"
+      shift
+      ;;
+  esac
 done
-
-# Remove --docker from positional args for iteration count
-[[ "$1" =~ ^[0-9]+$ ]] && MAX_ITERATIONS=$1
 
 if [[ ! -f "$SCRIPT_DIR/prompt.md" ]]; then
   echo "Error: $SCRIPT_DIR/prompt.md not found"
@@ -32,18 +47,46 @@ JQ_FILTER='
     "✅ Done | turns=\(.num_turns) cost=$\(.total_cost_usd | tostring) time=\((.duration_ms / 1000 * 10 | floor) / 10)s"
   else empty end'
 
+PROMPT="$(cat "$SCRIPT_DIR/prompt.md")"
+
+if [[ -n "$MILESTONE" ]]; then
+  PROMPT="$PROMPT
+
+## Milestone Scope
+
+You are scoped to the milestone: \"$MILESTONE\"
+
+When listing tasks, ALWAYS include the milestone filter:
+\`\`\`bash
+gh issue list --label \"task\" --milestone \"$MILESTONE\" --search '-label:\"in-progress\" -label:done'
+\`\`\`
+
+Do NOT pick up tasks from other milestones. If a task has no milestone or belongs to a different milestone, skip it.
+When updating the progress log, note that you worked on milestone \"$MILESTONE\"."
+fi
+
+if [[ -n "$EXTRA_INSTRUCTIONS" ]]; then
+  PROMPT="$PROMPT
+
+## Additional Instructions
+
+$EXTRA_INSTRUCTIONS"
+fi
+
 echo "Starting Ralph (AFK mode)"
 echo "Max iterations: $MAX_ITERATIONS"
 echo "Docker sandbox: $USE_DOCKER"
+[[ -n "$MILESTONE" ]] && echo "Milestone: $MILESTONE"
+[[ -n "$EXTRA_INSTRUCTIONS" ]] && echo "Extra instructions: (provided)"
 echo "---"
 
 for i in $(seq 1 "$MAX_ITERATIONS"); do
   echo "=== Iteration $i/$MAX_ITERATIONS ==="
 
   if $USE_DOCKER; then
-    OUTPUT=$(docker sandbox run claude -p "$(cat "$SCRIPT_DIR/prompt.md")" 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$(docker sandbox run claude -p "$PROMPT" 2>&1 | tee /dev/stderr) || true
   else
-    OUTPUT=$(claude -p "$(cat "$SCRIPT_DIR/prompt.md")" \
+    OUTPUT=$(claude -p "$PROMPT" \
       --dangerously-skip-permissions \
       --output-format stream-json \
       --verbose 2>/dev/null \
