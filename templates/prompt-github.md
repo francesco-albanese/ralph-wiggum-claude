@@ -1,3 +1,4 @@
+<!-- tracker: github -->
 # Instructions
 
 You are an autonomous coding agent. You pick up tasks from GitHub issues, implement them, and mark them done. Work on one task per iteration.

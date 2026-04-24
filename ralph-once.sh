@@ -27,10 +27,32 @@ if [[ ! -f "$SCRIPT_DIR/prompt.md" ]]; then
   exit 1
 fi
 
+TRACKER="github"
+if head -1 "$SCRIPT_DIR/prompt.md" | grep -q "tracker: beads"; then
+  TRACKER="beads"
+fi
+
 PROMPT="$(cat "$SCRIPT_DIR/prompt.md")"
 
 if [[ -n "$MILESTONE" ]]; then
-  PROMPT="$PROMPT
+  if [[ "$TRACKER" == "beads" ]]; then
+    SLUG=$(echo "$MILESTONE" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+    PROMPT="$PROMPT
+
+## Milestone Scope
+
+You are scoped to the milestone: \"$MILESTONE\" (label: \`milestone:$SLUG\`).
+
+When listing tasks, ALWAYS include the milestone filter:
+\`\`\`bash
+bd ready --type task --label milestone:$SLUG
+\`\`\`
+
+When creating or updating beads, apply \`--label milestone:$SLUG\`.
+Do NOT pick up tasks that lack this label. Skip and pick a different free task.
+When updating the progress log, note that you worked on milestone \"$MILESTONE\"."
+  else
+    PROMPT="$PROMPT
 
 ## Milestone Scope
 
@@ -43,6 +65,7 @@ gh issue list --label \"task\" --milestone \"$MILESTONE\" --search '-label:\"in-
 
 Do NOT pick up tasks from other milestones. If a task has no milestone or belongs to a different milestone, skip it.
 When updating the progress log, note that you worked on milestone \"$MILESTONE\"."
+  fi
 fi
 
 if [[ -n "$EXTRA_INSTRUCTIONS" ]]; then
@@ -54,6 +77,7 @@ $EXTRA_INSTRUCTIONS"
 fi
 
 echo "Running single Ralph iteration (HITL mode)..."
+echo "Tracker: $TRACKER"
 [[ -n "$MILESTONE" ]] && echo "Milestone: $MILESTONE"
 [[ -n "$EXTRA_INSTRUCTIONS" ]] && echo "Extra instructions: (provided)"
 
