@@ -98,7 +98,7 @@ Discover available check commands from `CLAUDE.md`, the project's `package.json`
 
 ## 9. Git commit
 
-Make a git commit of the completed work. Only commit work for a single task.
+Make a git commit of the completed work then push to the remote. Only commit work for a single task. The push is required as the finalisation step so the task isn't left only locally.
 
 ## 10. Mark done
 
