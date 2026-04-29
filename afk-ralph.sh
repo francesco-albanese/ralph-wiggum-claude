@@ -34,6 +34,33 @@ if [[ ! -f "$SCRIPT_DIR/prompt.md" ]]; then
   exit 1
 fi
 
+# shellcheck disable=SC1091
+[[ -f "$SCRIPT_DIR/notify.env" ]] && source "$SCRIPT_DIR/notify.env"
+
+notify_whatsapp() {
+  local kind="$1"
+  local iterations="$2"
+  [[ -z "$WHATSAPP_PHONE" || -z "$WHATSAPP_APIKEY" ]] && return 0
+
+  local project milestone_label msg
+  project="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
+  milestone_label="${MILESTONE:-all tasks}"
+
+  if [[ "$kind" == "success" ]]; then
+    msg=$'Ralph done \xe2\x9c\x85\nProject: '"$project"$'\nMilestone: '"$milestone_label"$'\nIterations: '"$iterations"'/'"$MAX_ITERATIONS"
+  else
+    msg=$'Ralph stalled \xe2\x9a\xa0\xef\xb8\x8f\nProject: '"$project"$'\nMilestone: '"$milestone_label"$'\nHit max iterations ('"$MAX_ITERATIONS"') without completing.'
+  fi
+
+  if ! curl -G --max-time 10 --silent --fail \
+    --data-urlencode "phone=$WHATSAPP_PHONE" \
+    --data-urlencode "text=$msg" \
+    --data-urlencode "apikey=$WHATSAPP_APIKEY" \
+    https://api.callmebot.com/whatsapp.php >/dev/null; then
+    echo "WhatsApp notify failed (exit $?)" >&2
+  fi
+}
+
 TRACKER="github"
 if head -1 "$SCRIPT_DIR/prompt.md" | grep -q "tracker: beads"; then
   TRACKER="beads"
@@ -120,6 +147,7 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
 
   if [[ "$OUTPUT" == *"<promise>COMPLETE</promise>"* ]]; then
     echo "All tasks complete after $i iterations, exiting."
+    notify_whatsapp success "$i"
     exit 0
   fi
 
@@ -127,4 +155,5 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
 done
 
 echo "Max iterations ($MAX_ITERATIONS) reached"
+notify_whatsapp stall "$MAX_ITERATIONS"
 exit 1
