@@ -117,11 +117,33 @@ afk-ralph 10 --milestone "Frontend v2" &
 - GitHub: uses `--milestone "Sprint 3"` on `gh issue list`.
 - Beads: slugifies the name and uses `--label milestone:sprint-3` on `bd ready` / `bd create`.
 
+### WhatsApp notifications (AFK only)
+
+`afk-ralph` can ping you on WhatsApp via [CallMeBot](https://www.callmebot.com/blog/free-api-whatsapp-messages/) when a run finishes — both on success (all tasks complete) and on stall (max iterations hit without `<promise>COMPLETE</promise>`).
+
+1. Get a free CallMeBot apikey by following the link above (text "I allow callmebot to send me messages" to their WhatsApp number; you'll get an apikey reply).
+2. Copy the template and fill it in:
+   ```bash
+   cp scripts/ralph/notify.env.example scripts/ralph/notify.env
+   # edit scripts/ralph/notify.env
+   ```
+3. Phone format: international digits only, no `+` or spaces. UK `07123 456789` becomes `447123456789`.
+4. Add this to your project's `.gitignore`:
+   ```
+   scripts/ralph/notify.env
+   scripts/ralph/*.env
+   !scripts/ralph/*.env.example
+   ```
+
+If either env var is unset, notifications are silently skipped. If the curl call fails or times out (10s), the run still exits successfully — notifications are best-effort. Suppress for a single run with `WHATSAPP_PHONE= afk-ralph 25`.
+
 ## Files Structure
 
 ```text
 scripts/ralph/
-└── prompt.md      # Instructions for Claude (tracker-specific)
+├── prompt.md             # Instructions for Claude (tracker-specific)
+├── notify.env.example    # WhatsApp notify template (copy to notify.env)
+└── notify.env            # Your CallMeBot creds (gitignored, optional)
 ```
 
 ## How It Works
