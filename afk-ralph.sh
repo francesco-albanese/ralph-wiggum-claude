@@ -135,9 +135,10 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   echo "=== Iteration $i/$MAX_ITERATIONS ==="
 
   if $USE_DOCKER; then
-    OUTPUT=$(docker sandbox run claude -p "$PROMPT" 2>&1 | tee /dev/stderr) || true
+    OUTPUT=$(docker sandbox run claude -p "$PROMPT" --model sonnet 2>&1 | tee /dev/stderr) || true
   else
     OUTPUT=$(claude -p "$PROMPT" \
+      --model sonnet \
       --dangerously-skip-permissions \
       --output-format stream-json \
       --verbose 2>/dev/null \

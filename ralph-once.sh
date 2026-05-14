@@ -82,6 +82,7 @@ echo "Tracker: $TRACKER"
 [[ -n "$EXTRA_INSTRUCTIONS" ]] && echo "Extra instructions: (provided)"
 
 claude -p "$PROMPT" \
+  --model sonnet \
   --permission-mode acceptEdits \
   --output-format stream-json \
   --verbose 2>/dev/null \
