@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "ralph_wiggum_claude",
+  "project_id": "71fe46a8-fdcc-45da-ab55-fcf3902c53b6"
+}
