@@ -1,61 +1,138 @@
 import { spawn } from "node:child_process";
+import { parseBranch } from "./branch.js";
 import { streamAgentText } from "./stream.js";
+import { type Worktree, WorktreeManager } from "./worktree.js";
 
-export interface RunOptions {
+export type RunOptions = {
 	readonly branch: string;
-}
+};
 
 /**
- * Walking-skeleton end-to-end pipe:
- *   1. capture target (base) branch
- *   2. checkout the supplied source branch
- *   3. spawn Claude Code once in cwd, stream its text to stdout
- *   4. push the branch and open a draft PR against the captured base
- *   5. return the PR URL
- *
- * Scope is deliberately minimal — no worktree, no iteration loop,
- * no completion detection, no agent abstraction. Subsequent slices
- * (2yb, 3oo, n9e, ...) build on top of this skeleton.
+ * Walking-skeleton + worktree-isolation entrypoint:
+ *   1. validate `--branch` against the semantic-prefix list
+ *   2. capture target (base) branch on the host
+ *   3. create `.ralph/worktrees/<slug>/` attached to the new source branch
+ *   4. spawn Claude Code with cwd = worktree path, stream text to stdout
+ *   5. push the source branch + open a draft PR against the captured base
+ *   6. remove the worktree (clean exit, agent crash, or Ctrl-C)
+ *   7. return the PR URL
  */
 export async function runCommand(opts: RunOptions): Promise<string> {
-	const { branch } = opts;
+	// Validate the branch up-front so a bad --branch fails before we touch git.
+	parseBranch(opts.branch);
 
 	const baseBranch = await captureBaseBranch();
 	if (baseBranch.length === 0) {
 		throw new Error("could not determine current branch (detached HEAD?)");
 	}
-	if (baseBranch === branch) {
+	if (baseBranch === opts.branch) {
 		throw new Error(
-			`--branch ${branch} matches the current branch; supply a new branch name`,
+			`--branch ${opts.branch} matches the current branch; supply a new branch name`,
 		);
 	}
 
 	await ensureCleanWorktree();
 
-	const exists = await hasLocalBranch(branch);
-	await git(exists ? ["checkout", branch] : ["checkout", "-b", branch]);
+	let prUrl = "";
 
-	await spawnAgent();
+	await runInWorktree({
+		branch: opts.branch,
+		repoRoot: process.cwd(),
+		signal: installSignalAbort(),
+		agent: async ({ cwd, signal }) => {
+			await spawnClaude({ cwd, signal });
 
-	const commitsAhead = await countCommitsAhead(baseBranch);
-	if (commitsAhead === 0) {
-		throw new Error(
-			`agent produced no commits on ${branch}; refusing to open an empty PR`,
-		);
-	}
+			const commitsAhead = await countCommitsAhead({ cwd, base: baseBranch });
+			if (commitsAhead === 0) {
+				throw new Error(
+					`agent produced no commits on ${opts.branch}; refusing to open an empty PR`,
+				);
+			}
 
-	await git(["push", "-u", "origin", branch]);
+			await runProc({
+				cmd: "git",
+				args: ["push", "-u", "origin", opts.branch],
+				cwd,
+			});
 
-	return await createDraftPr({ base: baseBranch, head: branch });
+			prUrl = await createDraftPr({
+				cwd,
+				base: baseBranch,
+				head: opts.branch,
+			});
+		},
+	});
+
+	return prUrl;
 }
 
-async function captureBaseBranch(): Promise<string> {
-	const { stdout } = await runProc("git", ["branch", "--show-current"]);
-	return stdout.trim();
+export type AgentContext = {
+	readonly cwd: string;
+	readonly signal: AbortSignal;
+};
+
+export type AgentRunner = (ctx: AgentContext) => Promise<void>;
+
+export type RunInWorktreeOptions = {
+	readonly branch: string;
+	readonly repoRoot: string;
+	readonly agent: AgentRunner;
+	readonly signal?: AbortSignal;
+};
+
+/**
+ * Orchestrates the worktree lifecycle around a single agent invocation.
+ *
+ * The agent runs with `cwd = worktree.path` and an `AbortSignal` it
+ * MUST honour for fast Ctrl-C shutdown. The worktree is removed in a
+ * `finally` block, so cleanup happens on every exit path:
+ *   - clean return
+ *   - thrown error (agent crash / push failure / etc.)
+ *   - external abort (SIGINT/SIGTERM via `installSignalAbort`)
+ */
+export async function runInWorktree(opts: RunInWorktreeOptions): Promise<void> {
+	const branch = parseBranch(opts.branch);
+	const mgr = new WorktreeManager({ repoRoot: opts.repoRoot });
+
+	let wt: Worktree | undefined;
+	try {
+		wt = await mgr.create(branch);
+
+		const signal = opts.signal ?? new AbortController().signal;
+		if (signal.aborted) {
+			throw new Error("aborted before agent could start");
+		}
+
+		await opts.agent({ cwd: wt.path, signal });
+	} finally {
+		if (wt !== undefined) {
+			await mgr.remove(wt);
+		}
+	}
+}
+
+/**
+ * Wire SIGINT + SIGTERM to an AbortSignal. First signal aborts; second
+ * lets the default handler kill the process for real.
+ */
+function installSignalAbort(): AbortSignal {
+	const ac = new AbortController();
+	const onSignal = (sig: NodeJS.Signals) => {
+		process.off("SIGINT", onSignal);
+		process.off("SIGTERM", onSignal);
+		console.error(`\nralph: received ${sig}, cleaning up...`);
+		ac.abort();
+	};
+	process.once("SIGINT", onSignal);
+	process.once("SIGTERM", onSignal);
+	return ac.signal;
 }
 
 async function ensureCleanWorktree(): Promise<void> {
-	const { stdout } = await runProc("git", ["status", "--porcelain"]);
+	const { stdout } = await runProc({
+		cmd: "git",
+		args: ["status", "--porcelain"],
+	});
 	if (stdout.trim().length > 0) {
 		throw new Error(
 			"working tree is not clean; commit or stash changes before running ralph",
@@ -63,43 +140,7 @@ async function ensureCleanWorktree(): Promise<void> {
 	}
 }
 
-async function hasLocalBranch(branch: string): Promise<boolean> {
-	try {
-		await runProc("git", ["show-ref", "--verify", `refs/heads/${branch}`]);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-async function countCommitsAhead(base: string): Promise<number> {
-	const { stdout } = await runProc("git", [
-		"rev-list",
-		`${base}..HEAD`,
-		"--count",
-	]);
-	const n = Number.parseInt(stdout.trim(), 10);
-	return Number.isFinite(n) ? n : 0;
-}
-
-async function createDraftPr(args: {
-	base: string;
-	head: string;
-}): Promise<string> {
-	const { stdout } = await runProc("gh", [
-		"pr",
-		"create",
-		"--draft",
-		"--base",
-		args.base,
-		"--head",
-		args.head,
-		"--fill",
-	]);
-	return stdout.trim();
-}
-
-async function spawnAgent(): Promise<void> {
+async function spawnClaude(ctx: AgentContext): Promise<void> {
 	await new Promise<void>((resolve, reject) => {
 		const child = spawn(
 			"claude",
@@ -110,25 +151,43 @@ async function spawnAgent(): Promise<void> {
 				"--verbose",
 				"--dangerously-skip-permissions",
 			],
-			{ stdio: ["inherit", "pipe", "inherit"] },
+			{ cwd: ctx.cwd, stdio: ["inherit", "pipe", "inherit"] },
 		);
+
+		const onAbort = () => {
+			child.kill("SIGTERM");
+		};
+		if (ctx.signal.aborted) {
+			onAbort();
+		} else {
+			ctx.signal.addEventListener("abort", onAbort, { once: true });
+		}
 
 		const stdout = child.stdout;
 		if (stdout === null) {
+			ctx.signal.removeEventListener("abort", onAbort);
 			reject(new Error("claude subprocess produced no stdout"));
 			return;
 		}
 
 		const streaming = streamAgentText(stdout, process.stdout);
 
-		child.on("error", reject);
-		child.on("close", (code) => {
+		child.on("error", (err) => {
+			ctx.signal.removeEventListener("abort", onAbort);
+			reject(err);
+		});
+		child.on("close", (code, signal) => {
+			ctx.signal.removeEventListener("abort", onAbort);
 			streaming
 				.then(() => {
-					if (code === 0) {
+					if (ctx.signal.aborted) {
+						reject(new Error("claude aborted by signal"));
+					} else if (code === 0) {
 						resolve();
 					} else {
-						reject(new Error(`claude exited with code ${code}`));
+						const reason =
+							signal !== null ? `signal ${signal}` : `code ${code}`;
+						reject(new Error(`claude exited with ${reason}`));
 					}
 				})
 				.catch(reject);
@@ -136,18 +195,62 @@ async function spawnAgent(): Promise<void> {
 	});
 }
 
-async function git(args: readonly string[]): Promise<void> {
-	await runProc("git", args);
+async function captureBaseBranch(): Promise<string> {
+	const { stdout } = await runProc({
+		cmd: "git",
+		args: ["branch", "--show-current"],
+	});
+	return stdout.trim();
 }
 
-interface ProcResult {
+async function countCommitsAhead(args: {
+	cwd: string;
+	base: string;
+}): Promise<number> {
+	const { stdout } = await runProc({
+		cmd: "git",
+		args: ["rev-list", `${args.base}..HEAD`, "--count"],
+		cwd: args.cwd,
+	});
+	const n = Number.parseInt(stdout.trim(), 10);
+	return Number.isFinite(n) ? n : 0;
+}
+
+async function createDraftPr(args: {
+	cwd: string;
+	base: string;
+	head: string;
+}): Promise<string> {
+	const { stdout } = await runProc({
+		cmd: "gh",
+		args: [
+			"pr",
+			"create",
+			"--draft",
+			"--base",
+			args.base,
+			"--head",
+			args.head,
+			"--fill",
+		],
+		cwd: args.cwd,
+	});
+	return stdout.trim();
+}
+
+type ProcResult = {
 	readonly stdout: string;
 	readonly stderr: string;
-}
+};
 
-function runProc(cmd: string, args: readonly string[]): Promise<ProcResult> {
+function runProc(opts: {
+	cmd: string;
+	args: readonly string[];
+	cwd?: string;
+}): Promise<ProcResult> {
 	return new Promise((resolve, reject) => {
-		const child = spawn(cmd, args as string[], {
+		const child = spawn(opts.cmd, opts.args as string[], {
+			cwd: opts.cwd,
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
@@ -169,7 +272,7 @@ function runProc(cmd: string, args: readonly string[]): Promise<ProcResult> {
 				const detail = trimmed.length > 0 ? `: ${trimmed}` : "";
 				reject(
 					new Error(
-						`${cmd} ${args.join(" ")} exited with code ${code}${detail}`,
+						`${opts.cmd} ${opts.args.join(" ")} exited with code ${code}${detail}`,
 					),
 				);
 			}
