@@ -1,17 +1,43 @@
 {
 	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
 	"organizeImports": { "enabled": true },
-	"formatter": { "enabled": true, "indentStyle": "tab" },
+	"files": {
+		"ignore": [
+			"dist",
+			"node_modules",
+			"pnpm-lock.yaml",
+			"**/.ralph",
+			".beads",
+			".claude",
+			".dolt"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
 	"linter": {
 		"enabled": true,
 		"rules": {
 			"recommended": true,
-			"suspicious": { "noExplicitAny": "error" },
-			"style": { "useNodejsImportProtocol": "error" }
+			"suspicious": {
+				"noExplicitAny": "error"
+			},
+			"style": {
+				"useNodejsImportProtocol": "error",
+				"useImportType": "error"
+			}
 		}
 	},
-	"files": {
-		"ignore": ["dist", "node_modules", "**/.ralph"]
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double",
+			"semicolons": "always"
+		}
 	}
 }
