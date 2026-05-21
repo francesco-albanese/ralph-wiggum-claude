@@ -204,7 +204,6 @@ async function runOne(
 		return formatShellError(cmd, {
 			exitCode: result.exitCode,
 			stderr: result.stderr,
-			stdout: result.stdout,
 		});
 	}
 
@@ -224,7 +223,6 @@ function formatShellError(
 	detail: {
 		readonly exitCode?: number;
 		readonly stderr?: string;
-		readonly stdout?: string;
 		readonly reason?: string;
 	},
 ): string {
