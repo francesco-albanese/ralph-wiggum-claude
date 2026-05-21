@@ -1,0 +1,29 @@
+{
+  "name": "@franco-albanese/ralph",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ralph: TypeScript CLI that runs AI coding agents in a loop and ships PRs",
+  "type": "module",
+  "bin": {
+    "ralph": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.1.2",
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}
