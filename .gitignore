@@ -28,3 +28,6 @@ build/
 .dolt/
 *.db
 .beads-credential-key
+
+# Claude Code harness runtime
+.claude/worktrees/
