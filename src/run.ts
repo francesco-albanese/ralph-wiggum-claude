@@ -30,7 +30,10 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 		);
 	}
 
-	await git(["checkout", "-b", branch]);
+	await ensureCleanWorktree();
+
+	const exists = await hasLocalBranch(branch);
+	await git(exists ? ["checkout", branch] : ["checkout", "-b", branch]);
 
 	await spawnAgent();
 
@@ -49,6 +52,24 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 async function captureBaseBranch(): Promise<string> {
 	const { stdout } = await runProc("git", ["branch", "--show-current"]);
 	return stdout.trim();
+}
+
+async function ensureCleanWorktree(): Promise<void> {
+	const { stdout } = await runProc("git", ["status", "--porcelain"]);
+	if (stdout.trim().length > 0) {
+		throw new Error(
+			"working tree is not clean; commit or stash changes before running ralph",
+		);
+	}
+}
+
+async function hasLocalBranch(branch: string): Promise<boolean> {
+	try {
+		await runProc("git", ["show-ref", "--verify", `refs/heads/${branch}`]);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 async function countCommitsAhead(base: string): Promise<number> {
