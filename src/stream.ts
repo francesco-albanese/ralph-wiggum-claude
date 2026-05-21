@@ -16,7 +16,10 @@ export async function streamAgentText(
 	stdout: Readable,
 	out: NodeJS.WritableStream,
 ): Promise<void> {
-	const rl = createInterface({ input: stdout, crlfDelay: Infinity });
+	const rl = createInterface({
+		input: stdout,
+		crlfDelay: Number.POSITIVE_INFINITY,
+	});
 
 	for await (const line of rl) {
 		const trimmed = line.trim();
@@ -38,19 +41,19 @@ export async function streamAgentText(
 
 function extractAssistantText(event: unknown): string {
 	if (!isRecord(event)) return "";
-	if (event["type"] !== "assistant") return "";
+	if (event.type !== "assistant") return "";
 
-	const message = event["message"];
+	const message = event.message;
 	if (!isRecord(message)) return "";
 
-	const content = message["content"];
+	const content = message.content;
 	if (!Array.isArray(content)) return "";
 
 	let out = "";
 	for (const block of content) {
 		if (!isRecord(block)) continue;
-		if (block["type"] !== "text") continue;
-		const text = block["text"];
+		if (block.type !== "text") continue;
+		const text = block.text;
 		if (typeof text === "string") out += text;
 	}
 	return out;
