@@ -24,10 +24,14 @@ export type WorktreeManagerOptions = {
  * `git worktree add -b <branch> <path>` so the new branch is created
  * fresh from the current HEAD.
  *
- * `remove()` runs `git worktree remove --force` and then deletes the
- * branch reference. Both steps tolerate "already gone" — remove is
- * safe to call from a `finally` block and from a signal handler that
- * may fire while the worktree is half-built.
+ * `remove()` only tears down the worktree directory; it never deletes
+ * the branch reference. The branch holds the agent's commits, and a
+ * `finally`-block cleanup runs on every exit path — including after a
+ * `git push` failure where those commits have NOT yet reached `origin`.
+ * Deleting the branch there would silently destroy work. Reusing the
+ * same `--branch` name on a later run is rejected by `create()` (the
+ * branch already exists); that's a user-actionable error, not a reason
+ * to drop commits.
  */
 export class WorktreeManager {
 	readonly #repoRoot: string;
@@ -48,7 +52,8 @@ export class WorktreeManager {
 	async remove(wt: Worktree): Promise<void> {
 		// git worktree remove fails if the dir is already gone or the
 		// worktree was never registered. Swallow — the goal of remove()
-		// is "no leftover state", not a perfect 1:1 inverse of create().
+		// is "no leftover worktree directory", not a perfect 1:1 inverse
+		// of create(). The branch reference is intentionally left alone.
 		const removed = await this.#tryGit([
 			"worktree",
 			"remove",
@@ -59,13 +64,6 @@ export class WorktreeManager {
 			await rm(wt.path, { recursive: true, force: true });
 			await this.#tryGit(["worktree", "prune"]);
 		}
-
-		// Delete the local branch even on the success path. The agent's
-		// commits have already been pushed to `origin/<branch>` by the
-		// time we get here, and the PR points at the remote ref — so the
-		// local branch is scratch state. Leaving it around would block
-		// the next `ralph run --branch <same-name>`.
-		await this.#tryGit(["branch", "-D", wt.branch.name]);
 	}
 
 	#git(args: readonly string[]): Promise<void> {

@@ -60,9 +60,9 @@ describe("runInWorktree", () => {
 
 		const expected = join(repo, ".ralph", "worktrees", "feat%2Fx");
 		expect(observedCwd).toBe(expected);
-		// cleanup
+		// worktree dir removed, branch reference preserved
 		expect(existsSync(expected)).toBe(false);
-		expect(git(repo, ["branch", "--list", "feat/x"]).trim()).toBe("");
+		expect(git(repo, ["branch", "--list", "feat/x"]).trim()).toBe("feat/x");
 	});
 
 	it("removes the worktree when the agent throws (crash path)", async () => {
@@ -76,7 +76,10 @@ describe("runInWorktree", () => {
 
 		const path = join(repo, ".ralph", "worktrees", "feat%2Fcrash");
 		expect(existsSync(path)).toBe(false);
-		expect(git(repo, ["branch", "--list", "feat/crash"]).trim()).toBe("");
+		// Crash path must NOT destroy the branch — agent commits live there.
+		expect(git(repo, ["branch", "--list", "feat/crash"]).trim()).toBe(
+			"feat/crash",
+		);
 	});
 
 	it("removes the worktree when the agent is aborted via the supplied signal (Ctrl-C path)", async () => {
@@ -113,6 +116,9 @@ describe("runInWorktree", () => {
 
 		const path = join(repo, ".ralph", "worktrees", "feat%2Fctrl-c");
 		expect(existsSync(path)).toBe(false);
-		expect(git(repo, ["branch", "--list", "feat/ctrl-c"]).trim()).toBe("");
+		// Ctrl-C path must NOT destroy the branch — same reason as crash.
+		expect(git(repo, ["branch", "--list", "feat/ctrl-c"]).trim()).toBe(
+			"feat/ctrl-c",
+		);
 	});
 });

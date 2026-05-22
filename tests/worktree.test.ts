@@ -67,7 +67,7 @@ describe("WorktreeManager", () => {
 		}
 	});
 
-	it("removes the worktree directory and prunes the branch on remove()", async () => {
+	it("removes the worktree directory but preserves the branch reference", async () => {
 		const branch = parseBranch("feat/cleanup");
 		const mgr = new WorktreeManager({ repoRoot: repo });
 
@@ -78,8 +78,10 @@ describe("WorktreeManager", () => {
 
 		expect(existsSync(wt.path)).toBe(false);
 
+		// Branch ref is intentionally retained — it holds the agent's
+		// commits, which may not yet be safe on the remote.
 		const branches = git(repo, ["branch", "--list", "feat/cleanup"]).trim();
-		expect(branches).toBe("");
+		expect(branches).toBe("feat/cleanup");
 
 		const list = git(repo, ["worktree", "list", "--porcelain"]);
 		expect(list).not.toContain("feat%2Fcleanup");
@@ -111,8 +113,10 @@ describe("WorktreeManager", () => {
 		}
 
 		expect(existsSync(wt.path)).toBe(false);
+		// Branch retained even on crash path: those commits might be the
+		// only copy of the agent's work.
 		const branches = git(repo, ["branch", "--list", "feat/crash"]).trim();
-		expect(branches).toBe("");
+		expect(branches).toBe("feat/crash");
 	});
 
 	it("remove() is idempotent — second call is a no-op", async () => {

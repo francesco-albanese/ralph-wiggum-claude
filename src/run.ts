@@ -178,11 +178,13 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 
 	let prUrl = "";
 
+	const repoRoot = await captureRepoRoot();
+
 	const signalCtl = installSignalAbort();
 	try {
 		await runInWorktree({
 			branch: opts.branch,
-			repoRoot: process.cwd(),
+			repoRoot,
 			signal: signalCtl.signal,
 			agent: async ({ cwd, signal }) => {
 				const orch: Orchestrator = {
@@ -320,6 +322,23 @@ async function hostCaptureBaseBranch(): Promise<string> {
 		throw new Error("could not determine current branch (detached HEAD?)");
 	}
 	return base;
+}
+
+// Resolve the repo root via git so `.ralph/worktrees/` always lands
+// under the toplevel, regardless of which subdirectory the user ran
+// `ralph` from. Crashes early if invoked outside a git repo.
+async function captureRepoRoot(): Promise<string> {
+	const { stdout } = await runProc({
+		cmd: "git",
+		args: ["rev-parse", "--show-toplevel"],
+	});
+	const root = stdout.trim();
+	if (root.length === 0) {
+		throw new Error(
+			"could not resolve git repo root; is the current directory inside a git repo?",
+		);
+	}
+	return root;
 }
 
 /**
