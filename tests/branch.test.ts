@@ -14,12 +14,18 @@ describe("parseBranch", () => {
 
 	it("slugifies the branch into a worktree-safe directory name", () => {
 		const result = parseBranch("feat/some-feature");
-		expect(result.slug).toBe("feat-some-feature");
+		expect(result.slug).toBe("feat%2Fsome-feature");
 	});
 
-	it("collapses nested path segments into hyphens", () => {
+	it("encodes nested path segments without collapsing distinct names", () => {
 		const result = parseBranch("feat/area/sub-task");
-		expect(result.slug).toBe("feat-area-sub-task");
+		expect(result.slug).toBe("feat%2Farea%2Fsub-task");
+	});
+
+	it("derives distinct slugs for branches that previously collided", () => {
+		// `feat/a-b` and `feat/a/b` both used to slug to `feat-a-b`.
+		expect(parseBranch("feat/a-b").slug).toBe("feat%2Fa-b");
+		expect(parseBranch("feat/a/b").slug).toBe("feat%2Fa%2Fb");
 	});
 
 	it("rejects branches with no slash", () => {

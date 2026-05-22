@@ -35,33 +35,41 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 
 	let prUrl = "";
 
-	await runInWorktree({
-		branch: opts.branch,
-		repoRoot: process.cwd(),
-		signal: installSignalAbort(),
-		agent: async ({ cwd, signal }) => {
-			await spawnClaude({ cwd, signal });
+	const signalCtl = installSignalAbort();
+	try {
+		await runInWorktree({
+			branch: opts.branch,
+			repoRoot: process.cwd(),
+			signal: signalCtl.signal,
+			agent: async ({ cwd, signal }) => {
+				await spawnClaude({ cwd, signal });
 
-			const commitsAhead = await countCommitsAhead({ cwd, base: baseBranch });
-			if (commitsAhead === 0) {
-				throw new Error(
-					`agent produced no commits on ${opts.branch}; refusing to open an empty PR`,
-				);
-			}
+				const commitsAhead = await countCommitsAhead({
+					cwd,
+					base: baseBranch,
+				});
+				if (commitsAhead === 0) {
+					throw new Error(
+						`agent produced no commits on ${opts.branch}; refusing to open an empty PR`,
+					);
+				}
 
-			await runProc({
-				cmd: "git",
-				args: ["push", "-u", "origin", opts.branch],
-				cwd,
-			});
+				await runProc({
+					cmd: "git",
+					args: ["push", "-u", "origin", opts.branch],
+					cwd,
+				});
 
-			prUrl = await createDraftPr({
-				cwd,
-				base: baseBranch,
-				head: opts.branch,
-			});
-		},
-	});
+				prUrl = await createDraftPr({
+					cwd,
+					base: baseBranch,
+					head: opts.branch,
+				});
+			},
+		});
+	} finally {
+		signalCtl.dispose();
+	}
 
 	return prUrl;
 }
@@ -113,19 +121,24 @@ export async function runInWorktree(opts: RunInWorktreeOptions): Promise<void> {
 
 /**
  * Wire SIGINT + SIGTERM to an AbortSignal. First signal aborts; second
- * lets the default handler kill the process for real.
+ * lets the default handler kill the process for real. The returned
+ * `dispose` must be called on every exit path so listeners don't
+ * accumulate when ralph is invoked repeatedly in the same process.
  */
-function installSignalAbort(): AbortSignal {
+function installSignalAbort(): { signal: AbortSignal; dispose: () => void } {
 	const ac = new AbortController();
-	const onSignal = (sig: NodeJS.Signals) => {
+	const dispose = () => {
 		process.off("SIGINT", onSignal);
 		process.off("SIGTERM", onSignal);
+	};
+	const onSignal = (sig: NodeJS.Signals) => {
+		dispose();
 		console.error(`\nralph: received ${sig}, cleaning up...`);
 		ac.abort();
 	};
 	process.once("SIGINT", onSignal);
 	process.once("SIGTERM", onSignal);
-	return ac.signal;
+	return { signal: ac.signal, dispose };
 }
 
 async function ensureCleanWorktree(): Promise<void> {

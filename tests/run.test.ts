@@ -58,7 +58,7 @@ describe("runInWorktree", () => {
 
 		await runInWorktree({ branch: "feat/x", repoRoot: repo, agent });
 
-		const expected = join(repo, ".ralph", "worktrees", "feat-x");
+		const expected = join(repo, ".ralph", "worktrees", "feat%2Fx");
 		expect(observedCwd).toBe(expected);
 		// cleanup
 		expect(existsSync(expected)).toBe(false);
@@ -74,7 +74,7 @@ describe("runInWorktree", () => {
 			runInWorktree({ branch: "feat/crash", repoRoot: repo, agent }),
 		).rejects.toThrow(/boom/);
 
-		const path = join(repo, ".ralph", "worktrees", "feat-crash");
+		const path = join(repo, ".ralph", "worktrees", "feat%2Fcrash");
 		expect(existsSync(path)).toBe(false);
 		expect(git(repo, ["branch", "--list", "feat/crash"]).trim()).toBe("");
 	});
@@ -111,7 +111,7 @@ describe("runInWorktree", () => {
 
 		await expect(promise).rejects.toThrow();
 
-		const path = join(repo, ".ralph", "worktrees", "feat-ctrl-c");
+		const path = join(repo, ".ralph", "worktrees", "feat%2Fctrl-c");
 		expect(existsSync(path)).toBe(false);
 		expect(git(repo, ["branch", "--list", "feat/ctrl-c"]).trim()).toBe("");
 	});

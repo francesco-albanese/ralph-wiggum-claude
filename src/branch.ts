@@ -64,6 +64,9 @@ export function parseBranch(input: string): ParsedBranch {
 	return { name: input, prefix, slug: slugifyBranch(input) };
 }
 
+// Collision-safe: percent-encodes `/` (and anything else encodeURIComponent
+// treats as reserved) so distinct branches always produce distinct slugs.
+// `feat/a-b` → `feat%2Fa-b`, `feat/a/b` → `feat%2Fa%2Fb`.
 function slugifyBranch(name: string): string {
-	return name.replace(/\//g, "-");
+	return encodeURIComponent(name);
 }

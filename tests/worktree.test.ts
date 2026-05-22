@@ -43,7 +43,7 @@ describe("WorktreeManager", () => {
 		const wt = await mgr.create(branch);
 
 		try {
-			expect(wt.path).toBe(join(repo, ".ralph", "worktrees", "feat-x"));
+			expect(wt.path).toBe(join(repo, ".ralph", "worktrees", "feat%2Fx"));
 			expect(existsSync(wt.path)).toBe(true);
 
 			const head = git(wt.path, ["rev-parse", "--abbrev-ref", "HEAD"]).trim();
@@ -53,14 +53,14 @@ describe("WorktreeManager", () => {
 		}
 	});
 
-	it("slugifies nested paths into a flat directory name", async () => {
+	it("slugifies nested paths into a collision-safe directory name", async () => {
 		const branch = parseBranch("feat/area/sub-task");
 		const mgr = new WorktreeManager({ repoRoot: repo });
 
 		const wt = await mgr.create(branch);
 		try {
 			expect(wt.path).toBe(
-				join(repo, ".ralph", "worktrees", "feat-area-sub-task"),
+				join(repo, ".ralph", "worktrees", "feat%2Farea%2Fsub-task"),
 			);
 		} finally {
 			await mgr.remove(wt);
@@ -82,7 +82,7 @@ describe("WorktreeManager", () => {
 		expect(branches).toBe("");
 
 		const list = git(repo, ["worktree", "list", "--porcelain"]);
-		expect(list).not.toContain("feat-cleanup");
+		expect(list).not.toContain("feat%2Fcleanup");
 	});
 
 	it("rejects re-creating the same worktree", async () => {
