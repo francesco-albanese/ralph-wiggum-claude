@@ -31,3 +31,6 @@ build/
 
 # Claude Code harness runtime
 .claude/worktrees/
+
+# Ralph runtime
+.ralph/

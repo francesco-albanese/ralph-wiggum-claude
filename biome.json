@@ -1,0 +1,17 @@
+{
+	"$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+	"organizeImports": { "enabled": true },
+	"formatter": { "enabled": true, "indentStyle": "tab" },
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"suspicious": { "noExplicitAny": "error" },
+			"style": { "useNodejsImportProtocol": "error" }
+		}
+	},
+	"files": {
+		"ignore": ["dist", "node_modules", "**/.ralph"]
+	}
+}
