@@ -33,4 +33,7 @@ build/
 .claude/worktrees/
 
 # Ralph runtime
-.ralph/
+# .ralph/ralph.config.json IS committed (it's the project config). Only
+# the secrets file and runtime worktrees stay out of git.
+.ralph/.env*
+.ralph/worktrees/

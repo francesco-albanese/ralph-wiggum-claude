@@ -1,5 +1,13 @@
 import type { ZodError, ZodIssue } from "zod";
 
+/** Thrown when a config or secrets file fails validation. */
+export class ConfigError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ConfigError";
+	}
+}
+
 /**
  * Render a `ZodError` into a multi-line human-readable message keyed by
  * the source filename. Each issue line carries the full JSON path of the

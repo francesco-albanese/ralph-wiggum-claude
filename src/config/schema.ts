@@ -47,6 +47,18 @@ const baseConfigShape = {
 	feedbackLoop: z.array(NonEmptyString).optional(),
 };
 
+const baseConfigObject = z.object(baseConfigShape).strict();
+
+/**
+ * Schema for CLI-supplied overrides. Same shape as the config file but
+ * WITHOUT the committed-secret guard. CLI flags come from a typed
+ * `CliOverrides` object whose keys are fixed at compile time, so the
+ * secret-scan can only ever produce false positives (e.g. a future
+ * flag literally named `apiKey` would surface "looks like a secret;
+ * move it to .ralph/.env" — confusing for a command-line input).
+ */
+export const CliOverridesSchema = baseConfigObject;
+
 /**
  * Two-phase validation: first scan for known-secret-shaped keys and
  * emit a tailored "forbidden secret" issue (so the developer sees the
@@ -80,7 +92,7 @@ export const RalphConfigFileSchema = z.preprocess((value, ctx) => {
 		}
 	}
 	return cleaned;
-}, z.object(baseConfigShape).strict());
+}, baseConfigObject);
 
 export type RalphConfigFile = z.infer<typeof RalphConfigFileSchema>;
 
@@ -94,6 +106,14 @@ const PhoneNumber = z
 	.string()
 	.regex(/^[0-9]{7,15}$/u, "expected digits only, no '+' or spaces");
 
+/**
+ * `.passthrough()` lets users add arbitrary extra keys to `.ralph/.env`
+ * (e.g. a future agent's auth token) without rewiring the schema. It
+ * does NOT mean "ingest the entire OS environment" — the loader's
+ * `mergeSecrets` deliberately only pulls a fixed whitelist of keys
+ * from `process.env`, since the OS env is full of unrelated system
+ * vars that have no business in our secrets struct.
+ */
 export const RalphSecretsSchema = z
 	.object({
 		WHATSAPP_PHONE: PhoneNumber.optional(),
