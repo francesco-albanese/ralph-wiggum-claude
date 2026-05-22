@@ -1,0 +1,28 @@
+# Default: normalise line endings, treat as text where Git decides.
+* text=auto eol=lf
+
+# Lockfiles — collapsed in GitHub diffs ("Load diff" button)
+pnpm-lock.yaml linguist-generated=true -diff
+package-lock.json linguist-generated=true -diff
+yarn.lock linguist-generated=true -diff
+
+# Generated / vendored
+dist/** linguist-generated=true
+**/*.min.js linguist-generated=true
+**/*.min.css linguist-generated=true
+
+# Explicit text formats (defensive — keeps LF on Windows checkouts)
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sh text eol=lf
+
+# Binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
