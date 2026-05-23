@@ -24,12 +24,13 @@
   },
   "packageManager": "pnpm@11.1.2",
   "dependencies": {
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/node": "^20.14.0",
     "typescript": "^5.5.0",
-    "vitest": "^2.1.4"
+    "vitest": "^2.1.5"
   }
 }
