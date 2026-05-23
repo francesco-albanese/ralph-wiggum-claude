@@ -111,5 +111,7 @@ describe("RalphSecretsSchema", () => {
 		// secret keys carry an enforced shape. Unknown vars are forwarded
 		// untouched so a future feature can read them without rewiring the
 		// loader.
+		expect(parsed.PATH).toBe("/usr/bin");
+		expect(parsed.HOME).toBe("/Users/x");
 	});
 });

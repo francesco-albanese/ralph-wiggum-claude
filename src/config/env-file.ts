@@ -67,7 +67,11 @@ function mergeSecrets(
 	const merged: Record<string, string> = { ...fromFile };
 	for (const key of KNOWN_SECRET_KEYS) {
 		const override = processEnv[key];
-		if (override !== undefined && override.length > 0) {
+		// Any defined override wins — including an explicit empty string.
+		// An empty override that fails schema validation surfaces as a
+		// ConfigError, which is the correct signal that a runtime secret
+		// is misconfigured (better than silently falling back to file).
+		if (override !== undefined) {
 			merged[key] = override;
 		}
 	}

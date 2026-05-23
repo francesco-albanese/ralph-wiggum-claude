@@ -141,6 +141,21 @@ describe("loadConfig", () => {
 		expect(result.secrets.WHATSAPP_PHONE).toBe("447222222222");
 	});
 
+	it("an explicit empty process.env value overrides the file (and then fails validation)", async () => {
+		// Precedence rule: any defined process.env override wins, even an
+		// empty string. An empty value can't be a valid secret, so the
+		// schema rejects it — surfacing a misconfigured runtime secret
+		// instead of silently falling back to the file value.
+		await writeEnvFile("WHATSAPP_PHONE=447111111111\n");
+		await expect(
+			loadConfig({
+				cwd: dir,
+				cliOverrides: {},
+				env: { WHATSAPP_PHONE: "" },
+			}),
+		).rejects.toThrow(/WHATSAPP_PHONE/);
+	});
+
 	it("rejects invalid WHATSAPP_PHONE format in secrets", async () => {
 		await writeEnvFile("WHATSAPP_PHONE=+44 7123 456789\n");
 		await expect(
