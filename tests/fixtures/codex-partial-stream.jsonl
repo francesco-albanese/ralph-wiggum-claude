@@ -1,0 +1,2 @@
+{"type":"response.created","response":{"id":"resp_2","model":"gpt-5.3-codex","usage":null}}
+{"type":"response.output_text.delta","delta":"Partial only."}

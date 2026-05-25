@@ -1,5 +1,7 @@
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
+import { DEFAULT_CONFIG } from "./config/defaults.js";
+import { type AgentProvider, claude } from "./providers.js";
 
 /**
  * Per-iteration token-usage counts, derived from each agent's
@@ -23,9 +25,11 @@ export type IterationUsage = {
  */
 export type ParsedStreamEvent =
 	| {
-			readonly kind: "init";
+			readonly kind: "session_id";
+			/** Agent session/thread id, when reported. */
+			readonly sessionId?: string;
 			/** Model id reported by the agent (e.g. "claude-opus-4-7"). */
-			readonly model: string;
+			readonly model?: string;
 	  }
 	| {
 			readonly kind: "text";
@@ -33,19 +37,21 @@ export type ParsedStreamEvent =
 			readonly text: string;
 	  }
 	| {
-			readonly kind: "tool";
+			readonly kind: "tool_call";
 			/** Tool name (e.g. "Bash", "Read", "Edit"). */
 			readonly name: string;
 			/** Raw tool input — shape varies per tool. */
 			readonly input: unknown;
 	  }
 	| {
-			readonly kind: "usage";
+			readonly kind: "result";
 			/** Token counts for this iteration so far (cumulative within the agent). */
 			readonly usage: IterationUsage;
 			/** Model the usage applies to, if the agent reported one. */
 			readonly model?: string;
 	  };
+
+const DEFAULT_PROVIDER = claude(DEFAULT_CONFIG.defaultModel);
 
 /**
  * Walking-skeleton stream-JSON parser for agent stream-JSON output.
@@ -63,8 +69,9 @@ export type ParsedStreamEvent =
 export async function streamAgentText(
 	stdout: Readable,
 	out: NodeJS.WritableStream,
+	provider: AgentProvider = DEFAULT_PROVIDER,
 ): Promise<void> {
-	for await (const event of streamAgentEvents(stdout)) {
+	for await (const event of streamAgentEvents(stdout, provider)) {
 		if (event.kind === "text") {
 			out.write(event.text);
 		}
@@ -86,6 +93,7 @@ export async function streamAgentText(
  */
 export async function* streamAgentEvents(
 	stdout: Readable,
+	provider: AgentProvider = DEFAULT_PROVIDER,
 ): AsyncGenerator<ParsedStreamEvent, void, void> {
 	const rl = createInterface({
 		input: stdout,
@@ -93,144 +101,6 @@ export async function* streamAgentEvents(
 	});
 
 	for await (const line of rl) {
-		const trimmed = line.trim();
-		if (trimmed.length === 0) continue;
-
-		let event: unknown;
-		try {
-			event = JSON.parse(trimmed);
-		} catch {
-			continue;
-		}
-
-		yield* parseEvent(event);
+		yield* provider.parseStreamLine(line);
 	}
-}
-
-function* parseEvent(event: unknown): Generator<ParsedStreamEvent, void, void> {
-	if (!isRecord(event)) return;
-
-	const type = event.type;
-
-	if (type === "system" && event.subtype === "init") {
-		const model = typeof event.model === "string" ? event.model : undefined;
-		if (model !== undefined) yield { kind: "init", model };
-		return;
-	}
-
-	if (type === "assistant") {
-		const message = event.message;
-		if (!isRecord(message)) return;
-
-		const content = message.content;
-		if (Array.isArray(content)) {
-			for (const block of content) {
-				if (!isRecord(block)) continue;
-				if (block.type === "text" && typeof block.text === "string") {
-					yield { kind: "text", text: block.text };
-				} else if (block.type === "tool_use") {
-					const name = typeof block.name === "string" ? block.name : "tool";
-					yield { kind: "tool", name, input: block.input };
-				}
-			}
-		}
-
-		// NB: we intentionally DO NOT surface usage from `assistant`
-		// events. Claude Code emits per-message usage there which would
-		// double-count against the authoritative final `result.usage`
-		// event. Cost is computed from `result` only.
-		//
-		// Trade-off: if the agent crashes/times out before emitting
-		// `result`, the iteration's cost is reported as $0. We accept
-		// that — surfacing a partial assistant.usage snapshot as the
-		// "real" cost would be MORE misleading, and the structured
-		// log keeps every parsed event raw so a forensic reader can
-		// still recover the partial totals. See stream.test.ts for
-		// both the realistic-capture and inverse-fixture regression
-		// tests.
-		return;
-	}
-
-	if (type === "result") {
-		// Terminal event — Claude Code reports the authoritative
-		// final usage here. The ONLY usage source we trust so the
-		// per-iteration totals are correct end-to-end.
-		const usage = parseUsage(event.usage);
-		if (usage !== undefined) {
-			const model = typeof event.model === "string" ? event.model : undefined;
-			yield model !== undefined
-				? { kind: "usage", usage, model }
-				: { kind: "usage", usage };
-		}
-	}
-
-	if (type === "response.completed") {
-		const response = event.response;
-		if (!isRecord(response)) return;
-
-		const usage = parseOpenAiUsage(response.usage);
-		if (usage !== undefined) {
-			const model =
-				typeof response.model === "string" ? response.model : undefined;
-			yield model !== undefined
-				? { kind: "usage", usage, model }
-				: { kind: "usage", usage };
-		}
-	}
-}
-
-function parseUsage(raw: unknown): IterationUsage | undefined {
-	if (!isRecord(raw)) return undefined;
-	const inputTokens = tokenCountOr(raw.input_tokens, 0);
-	const outputTokens = tokenCountOr(raw.output_tokens, 0);
-	const cacheCreateTokens = tokenCountOr(raw.cache_creation_input_tokens, 0);
-	const cacheReadTokens = tokenCountOr(raw.cache_read_input_tokens, 0);
-	return nonZeroUsage({
-		inputTokens,
-		outputTokens,
-		cacheCreateTokens,
-		cacheReadTokens,
-	});
-}
-
-function parseOpenAiUsage(raw: unknown): IterationUsage | undefined {
-	if (!isRecord(raw)) return undefined;
-	const totalInputTokens = tokenCountOr(raw.input_tokens, 0);
-	const inputDetails = isRecord(raw.input_tokens_details)
-		? raw.input_tokens_details
-		: undefined;
-	const cacheReadTokens = Math.min(
-		totalInputTokens,
-		tokenCountOr(inputDetails?.cached_tokens, 0),
-	);
-	const inputTokens = totalInputTokens - cacheReadTokens;
-	const outputTokens = tokenCountOr(raw.output_tokens, 0);
-	return nonZeroUsage({
-		inputTokens,
-		outputTokens,
-		cacheCreateTokens: 0,
-		cacheReadTokens,
-	});
-}
-
-function nonZeroUsage(usage: IterationUsage): IterationUsage | undefined {
-	if (
-		usage.inputTokens === 0 &&
-		usage.outputTokens === 0 &&
-		usage.cacheCreateTokens === 0 &&
-		usage.cacheReadTokens === 0
-	) {
-		// All zero — likely a placeholder; not useful to surface.
-		return undefined;
-	}
-	return usage;
-}
-
-function tokenCountOr(value: unknown, fallback: number): number {
-	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-	return Math.max(0, Math.floor(value));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }

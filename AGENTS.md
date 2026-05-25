@@ -98,3 +98,7 @@ _Add a brief overview of your project architecture_
 ## Conventions & Patterns
 
 _Add your project-specific conventions here_
+
+## Maintainability
+
+- Keep every source and test file at or under 300 lines. If a file would exceed that, split it into cohesive modules/tests before finishing.

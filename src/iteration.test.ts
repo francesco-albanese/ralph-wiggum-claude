@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, type Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import { runIteration } from "./iteration.js";
+import { codex } from "./providers.js";
 
 /**
  * Tiny fake of the bits of `ChildProcess` that runIteration uses,
@@ -186,5 +187,28 @@ describe("runIteration", () => {
 		child.finish(0);
 
 		await expect(result).resolves.toMatchObject({ outcome: "complete" });
+	});
+
+	it("uses the supplied provider in the default stream consumer path", async () => {
+		const child = makeFakeChild();
+		const out = new PassThrough();
+		const chunks: string[] = [];
+		out.on("data", (chunk: Buffer) => chunks.push(chunk.toString("utf8")));
+		const result = runIteration({
+			spawn: () => asChild(child),
+			out,
+			provider: codex("gpt-5.3-codex"),
+		});
+
+		child.emitStdout(
+			`${JSON.stringify({
+				type: "response.output_text.delta",
+				delta: "done from codex",
+			})}\n`,
+		);
+		child.finish(0);
+
+		await expect(result).resolves.toMatchObject({ outcome: "continue" });
+		expect(chunks.join("")).toContain("done from codex");
 	});
 });

@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
-import type { IterationResult } from "./iteration.js";
-import { pricedRunIteration, wireDisplay } from "./run.js";
+import type { IterationResult } from "../iteration.js";
+import { pricedRunIteration, wireDisplay } from "../run.js";
 
 const ZERO_USAGE = {
 	inputTokens: 0,

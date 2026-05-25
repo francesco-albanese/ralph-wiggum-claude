@@ -6,6 +6,7 @@ describe("parseRunOptions", () => {
 		const opts = parseRunOptions({ branch: "feat/x" });
 		expect(opts).toMatchObject({
 			branch: "feat/x",
+			agent: "claude",
 			maxIter: 10,
 			timeoutMin: 30,
 		});
@@ -50,5 +51,18 @@ describe("parseRunOptions", () => {
 		expect(() =>
 			parseRunOptions({ branch: "feat/x", completeSignal: "[unclosed" }),
 		).toThrow(/complete-signal/i);
+	});
+
+	it("parses --agent and defaults to claude", () => {
+		expect(parseRunOptions({ branch: "feat/x" }).agent).toBe("claude");
+		expect(parseRunOptions({ branch: "feat/x", agent: "codex" }).agent).toBe(
+			"codex",
+		);
+	});
+
+	it("rejects unsupported --agent", () => {
+		expect(() => parseRunOptions({ branch: "feat/x", agent: "qwen" })).toThrow(
+			/agent/i,
+		);
 	});
 });

@@ -1,0 +1,2 @@
+{"type":"system","subtype":"init","session_id":"claude-session-2","model":"claude-sonnet-4-5"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Partial only."}],"usage":{"input_tokens":100,"output_tokens":10}}}
