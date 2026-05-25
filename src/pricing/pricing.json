@@ -26,6 +26,36 @@
 			"output": 5.0,
 			"cacheCreate": 1.25,
 			"cacheRead": 0.1
+		},
+		"gpt-5.3-codex": {
+			"input": 1.75,
+			"output": 14.0,
+			"cacheCreate": 0.0,
+			"cacheRead": 0.175
+		},
+		"gpt-5.5": {
+			"input": 5.0,
+			"output": 30.0,
+			"cacheCreate": 0.0,
+			"cacheRead": 0.5
+		},
+		"gpt-5.4": {
+			"input": 2.5,
+			"output": 15.0,
+			"cacheCreate": 0.0,
+			"cacheRead": 0.25
+		},
+		"gpt-5.4-mini": {
+			"input": 0.75,
+			"output": 4.5,
+			"cacheCreate": 0.0,
+			"cacheRead": 0.075
+		},
+		"codex-mini-latest": {
+			"input": 1.5,
+			"output": 6.0,
+			"cacheCreate": 0.0,
+			"cacheRead": 0.375
 		}
 	}
 }

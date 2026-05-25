@@ -136,7 +136,7 @@ describe("addUsage", () => {
 });
 
 describe("bundled pricing JSON", () => {
-	it("ships in-package, is versioned, and lists known Claude models", () => {
+	it("ships in-package, is versioned, and lists known models", () => {
 		// `loadBundledPricing` reads from `src/pricing/pricing.json`
 		// next to this test (vitest runs from src/). Smoke-tests that
 		// the file is present, parses, and carries the required shape.
@@ -148,5 +148,33 @@ describe("bundled pricing JSON", () => {
 		// At least one model must exist so the production path
 		// doesn't degenerate to "every model is unknown".
 		expect(Object.keys(pricing.models).length).toBeGreaterThan(0);
+	});
+
+	it("prices current Codex/OpenAI models from bundled rates", () => {
+		const warnings: string[] = [];
+		const calc = new CostCalculator({
+			warn: (m) => warnings.push(m),
+		});
+
+		const codex = calc.priceUsage(
+			"gpt-5.3-codex",
+			usage({
+				inputTokens: 900_000,
+				outputTokens: 1_000_000,
+				cacheReadTokens: 100_000,
+			}),
+		);
+		expect(codex.inputUsd).toBeCloseTo(1.575);
+		expect(codex.outputUsd).toBeCloseTo(14);
+		expect(codex.cacheCreateUsd).toBe(0);
+		expect(codex.cacheReadUsd).toBeCloseTo(0.0175);
+		expect(codex.totalUsd).toBeCloseTo(15.5925);
+
+		const gpt55 = calc.priceUsage(
+			"gpt-5.5",
+			usage({ inputTokens: 1_000_000, outputTokens: 1_000_000 }),
+		);
+		expect(gpt55.totalUsd).toBeCloseTo(35);
+		expect(warnings).toEqual([]);
 	});
 });

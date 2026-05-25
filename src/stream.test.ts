@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { CostCalculator, loadBundledPricing } from "./cost.js";
 import {
 	type IterationUsage,
 	type ParsedStreamEvent,
@@ -168,6 +169,117 @@ describe("streamAgentEvents — usage discrimination", () => {
 			},
 		]);
 		expect(events.filter((e) => e.kind === "usage")).toHaveLength(0);
+	});
+
+	it("normalizes OpenAI Responses usage from response.completed", async () => {
+		const events = await pumpFixture([
+			{
+				type: "response.created",
+				response: {
+					model: "gpt-5.3-codex",
+					usage: null,
+				},
+			},
+			{
+				type: "response.completed",
+				response: {
+					model: "gpt-5.3-codex",
+					usage: {
+						input_tokens: 1200,
+						input_tokens_details: {
+							cached_tokens: 300,
+						},
+						output_tokens: 90,
+						output_tokens_details: {
+							reasoning_tokens: 12,
+						},
+						total_tokens: 1290,
+					},
+				},
+			},
+		]);
+
+		const usageEvents = events.filter(
+			(e): e is Extract<ParsedStreamEvent, { kind: "usage" }> =>
+				e.kind === "usage",
+		);
+		expect(usageEvents).toHaveLength(1);
+		expect(usageEvents[0]?.model).toBe("gpt-5.3-codex");
+		expect(usageEvents[0]?.usage).toEqual({
+			inputTokens: 900,
+			outputTokens: 90,
+			cacheCreateTokens: 0,
+			cacheReadTokens: 300,
+		});
+	});
+
+	it("tolerates OpenAI Responses usage without cached-token details", async () => {
+		const events = await pumpFixture([
+			{
+				type: "response.completed",
+				response: {
+					model: "gpt-5.5",
+					usage: {
+						input_tokens: 1200,
+						output_tokens: 90,
+						total_tokens: 1290,
+					},
+				},
+			},
+		]);
+
+		const usageEvents = events.filter(
+			(e): e is Extract<ParsedStreamEvent, { kind: "usage" }> =>
+				e.kind === "usage",
+		);
+		expect(usageEvents).toHaveLength(1);
+		expect(usageEvents[0]?.usage).toEqual({
+			inputTokens: 1200,
+			outputTokens: 90,
+			cacheCreateTokens: 0,
+			cacheReadTokens: 0,
+		});
+	});
+
+	it("feeds OpenAI cached input into cost calculation without double-billing", async () => {
+		const events = await pumpFixture([
+			{
+				type: "response.completed",
+				response: {
+					model: "gpt-5.3-codex",
+					usage: {
+						input_tokens: 1200,
+						input_tokens_details: {
+							cached_tokens: 300,
+						},
+						output_tokens: 90,
+						total_tokens: 1290,
+					},
+				},
+			},
+		]);
+		const usageEvent = events.find(
+			(e): e is Extract<ParsedStreamEvent, { kind: "usage" }> =>
+				e.kind === "usage",
+		);
+		expect(usageEvent).toBeDefined();
+		if (usageEvent === undefined) {
+			throw new Error("expected usage event");
+		}
+
+		const calc = new CostCalculator({
+			pricing: loadBundledPricing(),
+			warn: () => {},
+		});
+		const cost = calc.priceUsage(usageEvent.model, usageEvent.usage);
+		expect(cost.inputUsd).toBeCloseTo((900 / 1_000_000) * 1.75);
+		expect(cost.cacheReadUsd).toBeCloseTo((300 / 1_000_000) * 0.175);
+		expect(cost.outputUsd).toBeCloseTo((90 / 1_000_000) * 14);
+		expect(cost.totalUsd).toBeCloseTo(
+			(900 / 1_000_000) * 1.75 +
+				(300 / 1_000_000) * 0.175 +
+				(90 / 1_000_000) * 14,
+		);
 	});
 
 	it("sanitizes malformed token counts before emitting usage", async () => {

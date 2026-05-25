@@ -5,8 +5,8 @@ import type { Readable } from "node:stream";
  * Per-iteration token-usage counts, derived from each agent's
  * stream-JSON. NEVER from a separate API call.
  *
- * Field names match Claude Code's `message.usage` shape, normalised
- * to camelCase for our own surface.
+ * Field names match provider token usage shapes, normalised to
+ * camelCase for our own surface.
  */
 export type IterationUsage = {
 	readonly inputTokens: number;
@@ -48,8 +48,7 @@ export type ParsedStreamEvent =
 	  };
 
 /**
- * Walking-skeleton stream-JSON parser for Claude Code's
- * `--output-format stream-json --verbose` output.
+ * Walking-skeleton stream-JSON parser for agent stream-JSON output.
  *
  * Claude emits one JSON object per line. We only care about
  * `assistant` events and within those only `text` content
@@ -79,8 +78,9 @@ export async function streamAgentText(
  * subprocess.
  *
  * Non-JSON lines and uninteresting event types are silently dropped.
- * Token-usage events are surfaced only from the terminal `result`
- * event, which is the authoritative final usage for the iteration.
+ * Token-usage events are surfaced only from terminal events:
+ * Claude Code's `result` or OpenAI Responses' `response.completed`.
+ * Those are the authoritative final usage for the iteration.
  * Intermediate `assistant.message.usage` snapshots are intentionally
  * ignored to avoid double-counting.
  */
@@ -163,6 +163,20 @@ function* parseEvent(event: unknown): Generator<ParsedStreamEvent, void, void> {
 				: { kind: "usage", usage };
 		}
 	}
+
+	if (type === "response.completed") {
+		const response = event.response;
+		if (!isRecord(response)) return;
+
+		const usage = parseOpenAiUsage(response.usage);
+		if (usage !== undefined) {
+			const model =
+				typeof response.model === "string" ? response.model : undefined;
+			yield model !== undefined
+				? { kind: "usage", usage, model }
+				: { kind: "usage", usage };
+		}
+	}
 }
 
 function parseUsage(raw: unknown): IterationUsage | undefined {
@@ -171,16 +185,45 @@ function parseUsage(raw: unknown): IterationUsage | undefined {
 	const outputTokens = tokenCountOr(raw.output_tokens, 0);
 	const cacheCreateTokens = tokenCountOr(raw.cache_creation_input_tokens, 0);
 	const cacheReadTokens = tokenCountOr(raw.cache_read_input_tokens, 0);
+	return nonZeroUsage({
+		inputTokens,
+		outputTokens,
+		cacheCreateTokens,
+		cacheReadTokens,
+	});
+}
+
+function parseOpenAiUsage(raw: unknown): IterationUsage | undefined {
+	if (!isRecord(raw)) return undefined;
+	const totalInputTokens = tokenCountOr(raw.input_tokens, 0);
+	const inputDetails = isRecord(raw.input_tokens_details)
+		? raw.input_tokens_details
+		: undefined;
+	const cacheReadTokens = Math.min(
+		totalInputTokens,
+		tokenCountOr(inputDetails?.cached_tokens, 0),
+	);
+	const inputTokens = totalInputTokens - cacheReadTokens;
+	const outputTokens = tokenCountOr(raw.output_tokens, 0);
+	return nonZeroUsage({
+		inputTokens,
+		outputTokens,
+		cacheCreateTokens: 0,
+		cacheReadTokens,
+	});
+}
+
+function nonZeroUsage(usage: IterationUsage): IterationUsage | undefined {
 	if (
-		inputTokens === 0 &&
-		outputTokens === 0 &&
-		cacheCreateTokens === 0 &&
-		cacheReadTokens === 0
+		usage.inputTokens === 0 &&
+		usage.outputTokens === 0 &&
+		usage.cacheCreateTokens === 0 &&
+		usage.cacheReadTokens === 0
 	) {
 		// All zero — likely a placeholder; not useful to surface.
 		return undefined;
 	}
-	return { inputTokens, outputTokens, cacheCreateTokens, cacheReadTokens };
+	return usage;
 }
 
 function tokenCountOr(value: unknown, fallback: number): number {
