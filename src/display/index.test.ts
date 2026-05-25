@@ -1,8 +1,8 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { CostCalculator, type PricingTable } from "./cost.js";
-import { formatToolLine, StreamDisplay } from "./display.js";
-import type { LogEvent, StructuredLog } from "./log.js";
+import { CostCalculator, type PricingTable } from "../cost.js";
+import { formatToolLine, StreamDisplay } from "../display.js";
+import type { LogEvent, StructuredLog } from "../log.js";
 
 const FIXTURE_PRICING: PricingTable = {
 	version: "test",
@@ -161,7 +161,7 @@ describe("StreamDisplay.consume", () => {
 		expect(JSON.stringify(streamEvents)).not.toContain("secret-token");
 		expect(streamEvents).toContainEqual(
 			expect.objectContaining({
-				payload: { kind: "tool", name: "Bash", input: "[redacted]" },
+				payload: { kind: "tool_call", name: "Bash", input: "[redacted]" },
 			}),
 		);
 	});

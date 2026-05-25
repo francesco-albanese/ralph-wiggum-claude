@@ -5,8 +5,15 @@ import {
 	type CostCalculator,
 	EMPTY_USAGE,
 } from "./cost.js";
+import {
+	defaultDim,
+	formatToolLine,
+	redactStreamEvent,
+	zeroCost,
+} from "./display/format.js";
 import type { IterationResult } from "./iteration.js";
 import type { StructuredLog } from "./log.js";
+import type { AgentProvider } from "./providers.js";
 import {
 	type IterationUsage,
 	type ParsedStreamEvent,
@@ -18,6 +25,8 @@ import {
 	renderFinalSummary,
 	renderIterationSummary,
 } from "./summary.js";
+
+export { formatToolLine } from "./display/format.js";
 
 /**
  * Per-iteration aggregation built up by `StreamDisplay` as
@@ -50,6 +59,7 @@ export type StreamDisplayOptions = {
 	 * without coupling to `iteration.ts` internals.
 	 */
 	readonly completeSignal?: RegExp;
+	readonly provider?: AgentProvider;
 };
 
 const DEFAULT_TOOL_ARG_MAX = 80;
@@ -73,6 +83,7 @@ export class StreamDisplay {
 	private readonly toolArgMax: number;
 	private readonly dim: (text: string) => string;
 	private readonly completeSignal: RegExp;
+	private readonly provider: AgentProvider | undefined;
 	private accumulatedText = "";
 
 	constructor(opts: StreamDisplayOptions) {
@@ -82,6 +93,7 @@ export class StreamDisplay {
 		this.toolArgMax = opts.toolArgMaxChars ?? DEFAULT_TOOL_ARG_MAX;
 		this.dim = opts.dim ?? defaultDim;
 		this.completeSignal = opts.completeSignal ?? DEFAULT_COMPLETE_SIGNAL;
+		this.provider = opts.provider;
 	}
 
 	/**
@@ -103,7 +115,7 @@ export class StreamDisplay {
 		};
 		this.accumulatedText = "";
 
-		for await (const event of streamAgentEvents(stdout)) {
+		for await (const event of streamAgentEvents(stdout, this.provider)) {
 			this.slog.write({
 				event: "stream",
 				ts: new Date().toISOString(),
@@ -122,8 +134,10 @@ export class StreamDisplay {
 
 	private render(event: ParsedStreamEvent): void {
 		switch (event.kind) {
-			case "init":
-				log.info(`agent ready (model: ${event.model})`, { output: this.out });
+			case "session_id":
+				if (event.model !== undefined) {
+					log.info(`agent ready (model: ${event.model})`, { output: this.out });
+				}
 				return;
 			case "text":
 				// Dim streamed prose so the per-iteration summary box
@@ -132,12 +146,12 @@ export class StreamDisplay {
 				// symbol per chunk.
 				this.out.write(this.dim(event.text));
 				return;
-			case "tool":
+			case "tool_call":
 				log.step(formatToolLine(event.name, event.input, this.toolArgMax), {
 					output: this.out,
 				});
 				return;
-			case "usage":
+			case "result":
 				// Don't render usage events directly — they roll up
 				// into the iteration-summary box.
 				return;
@@ -146,8 +160,8 @@ export class StreamDisplay {
 
 	private fold(acc: IterationAccumulator, event: ParsedStreamEvent): void {
 		switch (event.kind) {
-			case "init":
-				acc.model = event.model;
+			case "session_id":
+				if (event.model !== undefined) acc.model = event.model;
 				return;
 			case "text": {
 				// Accumulate a small text buffer so multi-chunk
@@ -162,9 +176,9 @@ export class StreamDisplay {
 				}
 				return;
 			}
-			case "tool":
+			case "tool_call":
 				return;
-			case "usage": {
+			case "result": {
 				// `stream.ts` only surfaces usage from the terminal
 				// `result` event, so we expect a single usage event per
 				// iteration. Using last-writer-wins (not additive) keeps
@@ -249,75 +263,4 @@ export class StreamDisplay {
 			totalCost,
 		});
 	}
-}
-
-function defaultDim(text: string): string {
-	// ANSI 2 = dim. Avoid pulling in a colour lib for one escape.
-	return `\x1b[2m${text}\x1b[22m`;
-}
-
-export function formatToolLine(
-	name: string,
-	input: unknown,
-	maxArgChars: number,
-): string {
-	const args = formatToolArgs(input, maxArgChars);
-	return args.length > 0 ? `${name}: ${args}` : name;
-}
-
-function formatToolArgs(input: unknown, maxChars: number): string {
-	if (input === undefined || input === null) return "";
-	if (typeof input === "string") return truncate(input, maxChars);
-	if (typeof input !== "object") return truncate(String(input), maxChars);
-
-	const rec = input as Record<string, unknown>;
-	// Bash/Read/Edit all use `command`/`file_path`/`path` as the
-	// salient arg. Pick the first one present so the one-line entry
-	// reads like `Bash: bd ready --json` and not a JSON blob.
-	for (const key of [
-		"command",
-		"cmd",
-		"file_path",
-		"filePath",
-		"path",
-		"pattern",
-		"query",
-		"url",
-	]) {
-		const v = rec[key];
-		if (typeof v === "string") return truncate(v, maxChars);
-	}
-	const json = JSON.stringify(input);
-	return truncate(json, maxChars);
-}
-
-function truncate(s: string, max: number): string {
-	const collapsed = s.replace(/\s+/g, " ").trim();
-	if (collapsed.length <= max) return collapsed;
-	return `${collapsed.slice(0, max - 1)}…`;
-}
-
-function zeroCost(): CostBreakdown {
-	return {
-		inputUsd: 0,
-		outputUsd: 0,
-		cacheCreateUsd: 0,
-		cacheReadUsd: 0,
-		totalUsd: 0,
-	};
-}
-
-function redactStreamEvent(event: ParsedStreamEvent): ParsedStreamEvent {
-	switch (event.kind) {
-		case "text":
-			return { kind: "text", text: redactedText(event.text) };
-		case "tool":
-			return { kind: "tool", name: event.name, input: "[redacted]" };
-		default:
-			return event;
-	}
-}
-
-function redactedText(text: string): string {
-	return `[redacted ${text.length} chars]`;
 }

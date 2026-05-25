@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { cleanup, createDefaultPorts, formatCleanupReport } from "./cleanup.js";
+import { AGENT_NAMES, type AgentName } from "./config/schema.js";
 import { runInit } from "./init/index.js";
 import { runProc } from "./proc.js";
 import { captureRepoRoot, type RunOptions, runCommand } from "./run.js";
@@ -11,6 +12,7 @@ const DEFAULT_TIMEOUT_MIN = 30;
 
 export interface RawCliOptions {
 	readonly branch: string;
+	readonly agent?: string;
 	readonly maxIter?: string;
 	readonly timeoutMin?: string;
 	readonly completeSignal?: string;
@@ -22,7 +24,7 @@ export interface RawCliOptions {
  * (no real subprocess needed).
  */
 export function parseRunOptions(raw: RawCliOptions): Required<
-	Pick<RunOptions, "branch" | "maxIter" | "timeoutMin">
+	Pick<RunOptions, "branch" | "agent" | "maxIter" | "timeoutMin">
 > & {
 	readonly completeSignal?: RegExp;
 } {
@@ -34,6 +36,7 @@ export function parseRunOptions(raw: RawCliOptions): Required<
 		raw.timeoutMin !== undefined
 			? parsePositiveInt(raw.timeoutMin, "--timeout-min")
 			: DEFAULT_TIMEOUT_MIN;
+	const agent = parseAgent(raw.agent);
 
 	let completeSignal: RegExp | undefined;
 	if (raw.completeSignal !== undefined) {
@@ -46,8 +49,15 @@ export function parseRunOptions(raw: RawCliOptions): Required<
 	}
 
 	return completeSignal !== undefined
-		? { branch: raw.branch, maxIter, timeoutMin, completeSignal }
-		: { branch: raw.branch, maxIter, timeoutMin };
+		? { branch: raw.branch, agent, maxIter, timeoutMin, completeSignal }
+		: { branch: raw.branch, agent, maxIter, timeoutMin };
+}
+
+function parseAgent(value: string | undefined): AgentName {
+	if (value === undefined) return "claude";
+	if ((AGENT_NAMES as readonly string[]).includes(value))
+		return value as AgentName;
+	throw new Error(`--agent must be one of: ${AGENT_NAMES.join(", ")}`);
 }
 
 function parsePositiveInt(value: string, flag: string): number {
@@ -89,6 +99,11 @@ program
 	.option(
 		"--complete-signal <regex>",
 		"Regex that overrides the default <promise>COMPLETE</promise> sentinel",
+	)
+	.option(
+		"--agent <name>",
+		`Agent provider to run (${AGENT_NAMES.join("|")})`,
+		"claude",
 	)
 	.action(async (raw: RawCliOptions) => {
 		try {

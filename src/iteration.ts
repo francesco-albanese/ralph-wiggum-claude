@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { Readable } from "node:stream";
 import { createCompletionDetector } from "./completion.js";
+import type { AgentProvider } from "./providers.js";
 import { type IterationUsage, streamAgentText } from "./stream.js";
 
 export type IterationOutcome =
@@ -51,6 +52,8 @@ export interface RunIterationOptions {
 	 * with a regex (`--complete-signal`).
 	 */
 	readonly completeSignal?: RegExp;
+	/** Parser for the selected agent's JSONL stream. */
+	readonly provider?: AgentProvider;
 	/** Per-iteration timeout in ms. If exceeded, SIGTERM the agent. */
 	readonly timeoutMs?: number;
 	/**
@@ -117,7 +120,7 @@ export function runIteration(
 				? opts.consume(stdout).then((s) => {
 						consumerSummary = s;
 					})
-				: streamAgentText(stdout, sink);
+				: streamAgentText(stdout, sink, opts.provider);
 
 		const hardKillGraceMs = opts.hardKillGraceMs ?? DEFAULT_HARD_KILL_GRACE_MS;
 

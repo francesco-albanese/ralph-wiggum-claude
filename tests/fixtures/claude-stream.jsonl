@@ -1,0 +1,5 @@
+{"type":"system","subtype":"init","session_id":"claude-session-1","model":"claude-sonnet-4-5"}
+not-json
+{"type":"assistant","message":{"content":[{"type":"text","text":"Inspecting."},{"type":"tool_use","name":"Bash","input":{"command":"bd ready"}}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"<promise>COMPLETE</promise>"}]}}
+{"type":"result","model":"claude-sonnet-4-5","usage":{"input_tokens":1200,"output_tokens":80,"cache_creation_input_tokens":200,"cache_read_input_tokens":300}}
