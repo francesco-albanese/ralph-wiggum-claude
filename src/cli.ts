@@ -176,7 +176,7 @@ program
 
 export type RawInitOptions = {
 	readonly force?: boolean;
-	readonly noEditor?: boolean;
+	readonly editor?: boolean;
 };
 
 program
@@ -191,7 +191,7 @@ program
 			await runInit({
 				cwd: process.cwd(),
 				force: raw.force === true,
-				openEditor: raw.noEditor !== true,
+				openEditor: raw.editor !== false,
 			});
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
