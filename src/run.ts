@@ -64,9 +64,10 @@ export interface OrchestrationResult {
  *   1. capture target (base) branch
  *   2. ensure working tree is clean
  *   3. checkout the supplied source branch
- *   4. run the iteration loop (completion / max-iter / crash-rate)
- *   5. if any commits exist, push and open a draft PR
- *   6. mark the PR ready iff the invocation completed via the signal
+ *   4. run the iteration loop, opening a DRAFT PR the first time an
+ *      iteration produces commits (so long/stalled runs surface work
+ *      to humans early, not only after the loop exits)
+ *   5. mark the PR ready iff the invocation completed via the signal
  *
  * Zero-commits + outcome="complete" is treated as a no-op success
  * (no PR opened, empty `prUrl`). Zero-commits + stalled throws — a
@@ -92,13 +93,31 @@ export async function orchestrate(
 
 	await orch.checkoutBranch(branch);
 
+	// Open the draft PR the first time an iteration produces commits.
+	// We wrap `orch.runIteration` so the check + open happens INSIDE the
+	// loop, between iterations — not after it exits. `prUrl` is the
+	// guard against re-opening; subsequent iterations short-circuit.
+	let prUrl: string | undefined;
 	const summary = await runInvocation({
 		maxIter,
-		runIteration: orch.runIteration,
+		runIteration: async (iteration) => {
+			const result = await orch.runIteration(iteration);
+			if (prUrl === undefined) {
+				const commits = await orch.commitsAhead(baseBranch);
+				if (commits > 0) {
+					await orch.pushBranch(branch);
+					prUrl = await orch.createDraftPr({
+						base: baseBranch,
+						head: branch,
+					});
+				}
+			}
+			return result;
+		},
 	});
 
-	const commits = await orch.commitsAhead(baseBranch);
-	if (commits === 0) {
+	if (prUrl === undefined) {
+		// No iteration produced commits.
 		if (summary.outcome === "complete") {
 			// Agent completed cleanly with nothing to ship. Not a failure;
 			// surface as a no-op success so the CLI can print a clear
@@ -113,9 +132,6 @@ export async function orchestrate(
 			`agent produced no commits on ${branch}; refusing to open an empty PR`,
 		);
 	}
-
-	await orch.pushBranch(branch);
-	const prUrl = await orch.createDraftPr({ base: baseBranch, head: branch });
 
 	if (summary.outcome === "complete") {
 		await orch.markPrReady(prUrl);

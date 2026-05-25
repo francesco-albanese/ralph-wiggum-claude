@@ -63,6 +63,63 @@ describe("orchestrate", () => {
 		expect(result.prUrl).toBe("https://github.com/x/y/pull/1");
 	});
 
+	it("opens the draft PR after iteration 1 (before iteration 2 starts)", async () => {
+		// Long/stalled runs must surface work to humans early. The draft
+		// PR must exist by the time the second iteration begins so a
+		// reviewer can see progress without waiting for the loop to exit.
+		const callOrder: string[] = [];
+		const orch = makeOrchestrator({
+			pushBranch: vi.fn(async (_b: string) => {
+				callOrder.push("pushBranch");
+			}),
+			createDraftPr: vi.fn(async () => {
+				callOrder.push("createDraftPr");
+				return "https://github.com/x/y/pull/1";
+			}),
+			runIteration: vi.fn(async (iteration: number) => {
+				callOrder.push(`runIteration#${iteration}`);
+				return { outcome: "continue", exitCode: 0 } as IterationResult;
+			}),
+		});
+
+		await orchestrate(orch, { branch: "feat/foo", maxIter: 2 });
+
+		expect(callOrder).toEqual([
+			"runIteration#1",
+			"pushBranch",
+			"createDraftPr",
+			"runIteration#2",
+		]);
+		// And the PR is created exactly once, even though both iterations
+		// produce commits.
+		expect(orch.pushBranch).toHaveBeenCalledTimes(1);
+		expect(orch.createDraftPr).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not open a PR until an iteration actually produces commits", async () => {
+		// Iteration 1 produces 0 commits (agent only inspected); iteration
+		// 2 finally commits something. The PR should open then, not after
+		// iteration 1.
+		let iterations = 0;
+		const orch = makeOrchestrator({
+			runIteration: vi.fn(async () => {
+				iterations += 1;
+				return { outcome: "continue", exitCode: 0 } as IterationResult;
+			}),
+			// 0 commits on the first poll, 1 on the second.
+			commitsAhead: vi
+				.fn<(b: string) => Promise<number>>()
+				.mockResolvedValueOnce(0)
+				.mockResolvedValueOnce(1),
+		});
+
+		await orchestrate(orch, { branch: "feat/foo", maxIter: 2 });
+
+		expect(iterations).toBe(2);
+		expect(orch.createDraftPr).toHaveBeenCalledTimes(1);
+		expect(orch.commitsAhead).toHaveBeenCalledTimes(2);
+	});
+
 	it("refuses to open a PR when a STALLED invocation produced no commits", async () => {
 		const orch = makeOrchestrator({
 			commitsAhead: vi.fn(async () => 0),
