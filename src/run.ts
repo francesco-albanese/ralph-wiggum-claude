@@ -315,7 +315,12 @@ export async function runInWorktree(opts: RunInWorktreeOptions): Promise<void> {
 		const signal = opts.signal ?? new AbortController().signal;
 		const forceSignal = opts.forceSignal ?? new AbortController().signal;
 		if (signal.aborted) {
-			throw new Error("aborted before agent could start");
+			// Already aborted by the time the worktree existed (Ctrl-C
+			// during `git worktree add`). Don't throw — let the caller's
+			// `orchResult === undefined` branch surface as `interrupted`
+			// with exit 130, not a generic crash. The worktree still
+			// cleans up via the finally below.
+			return;
 		}
 
 		await opts.agent({ cwd: wt.path, signal, forceSignal });

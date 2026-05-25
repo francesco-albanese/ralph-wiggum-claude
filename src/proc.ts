@@ -46,7 +46,22 @@ export function runProc(opts: ProcOptions): Promise<ProcResult> {
 		});
 
 		child.on("error", reject);
-		child.on("close", (code) => {
+		child.on("close", (code, signal) => {
+			// Signal-terminated children expose `code === null` and a
+			// non-null signal name. `code ?? 0` would silently mask that
+			// as exit-0 success, so route it through the failure branch
+			// (unless the caller explicitly tolerates non-zero, e.g.
+			// `git merge-base --is-ancestor` whose exit code IS the answer).
+			if (signal !== null && opts.allowNonZero !== true) {
+				const trimmed = stderr.trim();
+				const detail = trimmed.length > 0 ? `: ${trimmed}` : "";
+				reject(
+					new Error(
+						`${opts.cmd} ${opts.args.join(" ")} terminated by signal ${signal}${detail}`,
+					),
+				);
+				return;
+			}
 			const exit = code ?? 0;
 			if (exit !== 0 && opts.allowNonZero !== true) {
 				const trimmed = stderr.trim();

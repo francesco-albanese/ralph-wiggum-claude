@@ -151,7 +151,14 @@ program
 		try {
 			const repoRoot = await captureRepoRoot();
 			const ports = createDefaultPorts({ repoRoot });
-			const base = raw.base ?? (await captureCurrentBranch(repoRoot));
+			// Resolve the default base from the cwd the user invoked from,
+			// NOT the main checkout — `repoRoot` is the main worktree path
+			// (`git worktree list --porcelain` always lists it first), so
+			// using it here would default to whatever branch the main
+			// checkout happens to be on, even when ralph was run from a
+			// linked worktree. `process.cwd()` mirrors normal `git`
+			// CLI behaviour: the active worktree decides.
+			const base = raw.base ?? (await captureCurrentBranch(process.cwd()));
 			const report = await cleanup(ports, {
 				base,
 				...(raw.branch !== undefined ? { branch: raw.branch } : {}),

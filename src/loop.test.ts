@@ -3,7 +3,12 @@ import type { IterationOutcome, IterationResult } from "./iteration.js";
 import { runInvocation } from "./loop.js";
 
 function fakeIteration(outcome: IterationOutcome): IterationResult {
-	return { outcome, exitCode: outcome === "complete" ? 0 : 1 };
+	// Mirror the iteration-runner contract: signal-killed children have
+	// no exit code (null), completed runs are exit-0, everything else
+	// gets a non-zero stand-in.
+	const exitCode =
+		outcome === "complete" ? 0 : outcome === "signal-killed" ? null : 1;
+	return { outcome, exitCode };
 }
 
 describe("runInvocation", () => {

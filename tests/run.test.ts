@@ -95,7 +95,17 @@ describe("runInWorktree", () => {
 	it("removes the worktree when the agent is aborted via the supplied signal (Ctrl-C path)", async () => {
 		const ac = new AbortController();
 
+		// Wait until the agent has actually entered before aborting —
+		// otherwise the abort fires during `git worktree add` and the
+		// pre-agent return path takes over, never exercising mid-flight
+		// cancellation. A 10ms timer was racy.
+		let agentStarted: () => void = () => {};
+		const startedPromise = new Promise<void>((r) => {
+			agentStarted = r;
+		});
+
 		const agent: AgentRunner = async ({ signal }) => {
+			agentStarted();
 			await new Promise<void>((resolve, reject) => {
 				if (signal.aborted) {
 					reject(new Error("aborted"));
@@ -118,8 +128,7 @@ describe("runInWorktree", () => {
 			signal: ac.signal,
 		});
 
-		// give the agent a tick to start, then abort
-		await new Promise((r) => setTimeout(r, 10));
+		await startedPromise;
 		ac.abort();
 
 		await expect(promise).rejects.toThrow();
@@ -129,6 +138,36 @@ describe("runInWorktree", () => {
 		// Ctrl-C path must NOT destroy the branch — same reason as crash.
 		expect(git(repo, ["branch", "--list", "feat/ctrl-c"]).trim()).toBe(
 			"feat/ctrl-c",
+		);
+	});
+
+	it("returns silently (does NOT throw) when the signal is already aborted before the agent starts", async () => {
+		// Regression guard: pre-agent abort must surface through the
+		// caller's `interrupted` path, NOT as a generic crash. Throwing
+		// here would bypass runCommand's `orchResult === undefined →
+		// outcome: "interrupted"` branch and the CLI would print a
+		// crash instead of a clean exit-130.
+		const ac = new AbortController();
+		ac.abort();
+
+		const agent: AgentRunner = async () => {
+			throw new Error("agent should NOT run after pre-agent abort");
+		};
+
+		await expect(
+			runInWorktree({
+				branch: "feat/pre-abort",
+				repoRoot: repo,
+				agent,
+				signal: ac.signal,
+			}),
+		).resolves.toBeUndefined();
+
+		// Worktree still cleaned up; branch ref preserved.
+		const path = join(repo, ".ralph", "worktrees", "feat%2Fpre-abort");
+		expect(existsSync(path)).toBe(false);
+		expect(git(repo, ["branch", "--list", "feat/pre-abort"]).trim()).toBe(
+			"feat/pre-abort",
 		);
 	});
 });

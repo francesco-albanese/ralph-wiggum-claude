@@ -379,6 +379,31 @@ describe("formatCleanupReport", () => {
 		expect(out).toContain("--apply");
 	});
 
+	it("hint is silent when no candidate is actually deletable (only checked-out)", () => {
+		const out = formatCleanupReport({
+			base: "main",
+			candidates: [{ branch: "feat/active", status: "checked-out" }],
+			deleted: [],
+			skipped: [],
+			applied: false,
+		});
+		expect(out).toContain("feat/active");
+		// No `--apply` hint — would be misleading because --apply still
+		// can't delete a checked-out branch.
+		expect(out).not.toContain("--apply");
+	});
+
+	it("hint nudges towards --force when only unpushed candidates exist", () => {
+		const out = formatCleanupReport({
+			base: "main",
+			candidates: [{ branch: "feat/wip", status: "unpushed" }],
+			deleted: [],
+			skipped: [],
+			applied: false,
+		});
+		expect(out).toContain("--apply --force");
+	});
+
 	it("renders an apply report with deletions and skips", () => {
 		const out = formatCleanupReport({
 			base: "main",

@@ -252,7 +252,23 @@ export function formatCleanupReport(report: CleanupReport): string {
 			lines.push("Nothing to delete.");
 		}
 	} else {
-		lines.push("Re-run with --apply to delete safe candidates.");
+		// Hint must match what would actually happen on `--apply`:
+		//   - any merged-fast-forward / squash-merged → plain --apply
+		//   - only unpushed remain → --apply --force is needed
+		//   - only checked-out (or no candidates) → nothing to suggest
+		const hasSafeDelete = report.candidates.some(
+			(c) => c.status === "merged-fast-forward" || c.status === "squash-merged",
+		);
+		const hasUnpushedOnly =
+			!hasSafeDelete && report.candidates.some((c) => c.status === "unpushed");
+		if (hasSafeDelete) {
+			lines.push("Re-run with --apply to delete safe candidates.");
+		} else if (hasUnpushedOnly) {
+			lines.push(
+				"All candidates have unpushed commits — re-run with --apply --force to delete them.",
+			);
+		}
+		// Otherwise: only checked-out or empty — nothing actionable, stay silent.
 	}
 
 	return lines.join("\n");
