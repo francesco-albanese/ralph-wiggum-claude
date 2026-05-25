@@ -9,6 +9,7 @@ const QG_HARD_KILL_GRACE_MS = 5_000;
 export type QualityGateAgentCommand = {
 	readonly cmd: string;
 	readonly args: readonly string[];
+	readonly env: Readonly<Record<string, string>>;
 };
 
 export function buildQualityGateAgentCommand(
@@ -16,7 +17,7 @@ export function buildQualityGateAgentCommand(
 	prompt: string,
 ): QualityGateAgentCommand {
 	const command = provider.buildPrintCommand({ prompt });
-	return { cmd: command.cmd, args: command.args };
+	return { cmd: command.cmd, args: command.args, env: command.env };
 }
 
 export function spawnQualityGateAgent(args: {
@@ -36,6 +37,7 @@ export function spawnQualityGateAgent(args: {
 		const out = args.out ?? process.stdout;
 		const child = spawnImpl(command.cmd, [...command.args], {
 			cwd: args.cwd,
+			env: { ...process.env, ...command.env },
 			stdio: ["ignore", "pipe", "inherit"],
 		}) as ChildProcess;
 

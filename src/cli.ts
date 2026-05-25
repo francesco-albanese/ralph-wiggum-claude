@@ -100,7 +100,11 @@ program
 		"--complete-signal <regex>",
 		"Regex that overrides the default <promise>COMPLETE</promise> sentinel",
 	)
-	.option("--agent <name>", "Agent provider to run (claude|codex)", "claude")
+	.option(
+		"--agent <name>",
+		`Agent provider to run (${AGENT_NAMES.join("|")})`,
+		"claude",
+	)
 	.action(async (raw: RawCliOptions) => {
 		try {
 			const opts = parseRunOptions(raw);

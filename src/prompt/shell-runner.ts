@@ -32,11 +32,16 @@ export const defaultShellRunner: RunShell = (cmd, opts) => {
 			current: number,
 			chunk: Buffer,
 		): number => {
-			if (current >= hardCap) return current;
+			if (current >= hardCap) {
+				if (!child.killed) child.kill("SIGTERM");
+				return current;
+			}
 			const remaining = hardCap - current;
 			if (chunk.byteLength <= remaining) {
 				chunks.push(chunk);
-				return current + chunk.byteLength;
+				const next = current + chunk.byteLength;
+				if (next >= hardCap && !child.killed) child.kill("SIGTERM");
+				return next;
 			}
 			chunks.push(chunk.subarray(0, remaining));
 			if (!child.killed) child.kill("SIGTERM");

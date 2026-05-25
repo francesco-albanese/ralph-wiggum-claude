@@ -15,7 +15,11 @@ export function derivePrTitle(args: {
 	if (colonAt > 0) {
 		const head = subject.slice(0, colonAt).trim().toLowerCase();
 		if (head === prefix) {
-			return `${prefix}: ${subject.slice(colonAt + 1).trim()}`;
+			const tail = subject.slice(colonAt + 1).trim();
+			if (tail.length === 0) {
+				throw new Error("quality gate produced an empty PR subject");
+			}
+			return `${prefix}: ${tail}`;
 		}
 	}
 	return `${prefix}: ${subject}`;

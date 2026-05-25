@@ -35,6 +35,7 @@ describe("buildQualityGateAgentCommand", () => {
 				"sonnet",
 				"PROMPT",
 			],
+			env: {},
 		});
 	});
 
@@ -54,6 +55,7 @@ describe("buildQualityGateAgentCommand", () => {
 				"gpt-5.3-codex",
 				"PROMPT",
 			],
+			env: {},
 		});
 	});
 });

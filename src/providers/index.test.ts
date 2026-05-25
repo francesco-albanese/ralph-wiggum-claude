@@ -1,11 +1,16 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { type AgentProvider, claude, codex } from "../providers.js";
 import type { ParsedStreamEvent } from "../stream.js";
 
+const FIXTURE_DIR = fileURLToPath(
+	new URL("../../tests/fixtures/", import.meta.url),
+);
+
 function fixtureLines(name: string): string[] {
-	return readFileSync(join(process.cwd(), "tests", "fixtures", name), "utf8")
+	return readFileSync(join(FIXTURE_DIR, name), "utf8")
 		.split(/\r?\n/u)
 		.filter((line) => line.length > 0);
 }

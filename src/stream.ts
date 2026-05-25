@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
 import { DEFAULT_CONFIG } from "./config/defaults.js";
-import { type AgentProvider, claude } from "./providers.js";
+import { type AgentProvider, createAgentProvider } from "./providers.js";
 
 /**
  * Per-iteration token-usage counts, derived from each agent's
@@ -51,7 +51,10 @@ export type ParsedStreamEvent =
 			readonly model?: string;
 	  };
 
-const DEFAULT_PROVIDER = claude(DEFAULT_CONFIG.defaultModel);
+const DEFAULT_PROVIDER = createAgentProvider(
+	DEFAULT_CONFIG.defaultAgent,
+	DEFAULT_CONFIG.defaultModel,
+);
 
 /**
  * Walking-skeleton stream-JSON parser for agent stream-JSON output.
