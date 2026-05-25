@@ -161,6 +161,50 @@ describe("orchestrate", () => {
 		expect(orch.markPrReady).not.toHaveBeenCalled();
 	});
 
+	it("leaves the PR draft when an iteration is interrupted mid-flight", async () => {
+		// Ctrl-C must NOT trigger markPrReady — the iteration was killed
+		// by signal, the work is incomplete, and the PR should stay draft
+		// so a reviewer sees it as "in progress, came back later".
+		const orch = makeOrchestrator({
+			runIteration: vi.fn(async () => ({
+				outcome: "signal-killed",
+				exitCode: null,
+			})) as Orchestrator["runIteration"],
+		});
+
+		const result = await orchestrate(orch, {
+			branch: "feat/foo",
+			maxIter: 5,
+		});
+
+		expect(orch.markPrReady).not.toHaveBeenCalled();
+		expect(result.outcome).toBe("interrupted");
+		expect(result.prUrl).toBe("https://github.com/x/y/pull/1");
+	});
+
+	it("returns empty prUrl when interrupted before any iteration produced commits", async () => {
+		// Ctrl-C on iteration 1 with no commits yet: no PR was opened,
+		// and orchestrate must not throw the "no commits" error that
+		// only applies to stalled runs.
+		const orch = makeOrchestrator({
+			commitsAhead: vi.fn(async () => 0),
+			runIteration: vi.fn(async () => ({
+				outcome: "signal-killed",
+				exitCode: null,
+			})) as Orchestrator["runIteration"],
+		});
+
+		const result = await orchestrate(orch, {
+			branch: "feat/foo",
+			maxIter: 5,
+		});
+
+		expect(result.outcome).toBe("interrupted");
+		expect(result.prUrl).toBe("");
+		expect(orch.createDraftPr).not.toHaveBeenCalled();
+		expect(orch.markPrReady).not.toHaveBeenCalled();
+	});
+
 	it("rejects --branch matching the captured base branch", async () => {
 		const orch = makeOrchestrator({
 			captureBaseBranch: vi.fn(async () => "feat/foo"),

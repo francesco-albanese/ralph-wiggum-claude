@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
-import { type RunOptions, runCommand } from "./run.js";
+import { cleanup, createDefaultPorts, formatCleanupReport } from "./cleanup.js";
+import { captureRepoRoot, type RunOptions, runCommand } from "./run.js";
 
 const DEFAULT_MAX_ITER = 10;
 const DEFAULT_TIMEOUT_MIN = 30;
@@ -90,15 +91,27 @@ program
 	.action(async (raw: RawCliOptions) => {
 		try {
 			const opts = parseRunOptions(raw);
-			const prUrl = await runCommand(opts);
-			if (prUrl.length === 0) {
+			const result = await runCommand(opts);
+
+			if (result.outcome === "interrupted") {
+				console.error(
+					`ralph: interrupted after ${result.iterations} iteration(s)` +
+						(result.crashes > 0 ? `, ${result.crashes} crash(es)` : "") +
+						(result.prUrl.length > 0
+							? `; draft PR left at ${result.prUrl}`
+							: ""),
+				);
+				process.exit(130);
+			}
+
+			if (result.prUrl.length === 0) {
 				// Agent completed with no commits — a legitimate no-op
 				// success, distinct from a failure. Print to stderr so
 				// scripts capturing stdout for the PR URL get an empty
 				// value rather than a non-URL surprise.
 				console.error("ralph: agent completed with no commits to ship");
 			} else {
-				console.log(prUrl);
+				console.log(result.prUrl);
 			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -106,6 +119,86 @@ program
 			process.exit(1);
 		}
 	});
+
+export type RawCleanupOptions = {
+	readonly base?: string;
+	readonly branch?: string;
+	readonly apply?: boolean;
+	readonly force?: boolean;
+};
+
+program
+	.command("cleanup")
+	.description(
+		"List (or delete) local branches whose commits are already on origin",
+	)
+	.option(
+		"--base <name>",
+		"Remote base to compare against (origin/<base>). Defaults to the current branch.",
+	)
+	.option(
+		"--branch <name>",
+		"Target a single local branch instead of scanning all locals",
+	)
+	.option(
+		"--apply",
+		"Actually delete eligible branches (default: dry-run)",
+		false,
+	)
+	.option("--force", "Allow deletion of branches with unpushed commits", false)
+	.action(async (raw: RawCleanupOptions) => {
+		try {
+			const repoRoot = await captureRepoRoot();
+			const ports = createDefaultPorts({ repoRoot });
+			const base = raw.base ?? (await captureCurrentBranch(repoRoot));
+			const report = await cleanup(ports, {
+				base,
+				...(raw.branch !== undefined ? { branch: raw.branch } : {}),
+				apply: raw.apply === true,
+				force: raw.force === true,
+			});
+			console.log(formatCleanupReport(report));
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`ralph: ${msg}`);
+			process.exit(1);
+		}
+	});
+
+async function captureCurrentBranch(repoRoot: string): Promise<string> {
+	const { spawn } = await import("node:child_process");
+	return new Promise((resolve, reject) => {
+		const child = spawn("git", ["branch", "--show-current"], {
+			cwd: repoRoot,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let stdout = "";
+		let stderr = "";
+		child.stdout.on("data", (c: Buffer) => {
+			stdout += c.toString("utf8");
+		});
+		child.stderr.on("data", (c: Buffer) => {
+			stderr += c.toString("utf8");
+		});
+		child.on("error", reject);
+		child.on("close", (code) => {
+			if (code !== 0) {
+				reject(new Error(`git branch --show-current failed: ${stderr.trim()}`));
+				return;
+			}
+			const b = stdout.trim();
+			if (b.length === 0) {
+				reject(
+					new Error(
+						"could not determine current branch (detached HEAD?); pass --base <name>",
+					),
+				);
+				return;
+			}
+			resolve(b);
+		});
+	});
+}
 
 // Only auto-parse argv when this file is the entry point. Importing
 // `cli.ts` (e.g. from tests) must not have side effects.

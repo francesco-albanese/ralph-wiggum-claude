@@ -73,6 +73,33 @@ describe("runInvocation", () => {
 		expect(summary.stallReason).toBe("crash-rate");
 	});
 
+	it("breaks the loop and surfaces 'interrupted' when an iteration is killed by signal", async () => {
+		// Regression guard: SIGINT must NOT cause the loop to spawn
+		// another agent. Without the early-out, "signal-killed" falls
+		// through and iteration 2 runs even though the user asked to stop.
+		const results: IterationResult[] = [
+			fakeIteration("continue"),
+			fakeIteration("signal-killed"),
+			fakeIteration("complete"),
+		];
+		const runOne = vi
+			.fn<() => Promise<IterationResult>>()
+			.mockImplementation(async () => {
+				const next = results.shift();
+				if (next === undefined) throw new Error("too many iterations");
+				return next;
+			});
+
+		const summary = await runInvocation({
+			maxIter: 10,
+			runIteration: runOne,
+		});
+
+		expect(runOne).toHaveBeenCalledTimes(2);
+		expect(summary.outcome).toBe("interrupted");
+		expect(summary.iterations).toBe(2);
+	});
+
 	it("does not abort early when a single iteration crashes", async () => {
 		// One crash on iteration 1 = 100% crash rate, but threshold is
 		// >=3 iterations before evaluating. Loop must continue.
