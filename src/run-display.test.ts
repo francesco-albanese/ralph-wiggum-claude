@@ -45,6 +45,36 @@ describe("wireDisplay", () => {
 			await stack.log.close();
 		}
 	});
+
+	it("renders the final stalled summary with the stall reason", async () => {
+		const root = mkdtempSync(join(tmpdir(), "ralph-wire-"));
+		const stack = wireDisplay({ repoRoot: root });
+		const writes: string[] = [];
+		const writeSpy = vi
+			.spyOn(process.stdout, "write")
+			.mockImplementation((chunk: string | Uint8Array) => {
+				writes.push(chunk.toString());
+				return true;
+			});
+
+		try {
+			stack.display.renderFinalSummary({
+				iterations: 3,
+				maxIter: 3,
+				outcome: "stalled",
+				stallReason: "max-iter",
+				totalUsage: ZERO_USAGE,
+			});
+			const output = writes
+				.join("")
+				.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "")
+				.trimEnd();
+			expect(output).toContain("ralph: stalled (max-iter)");
+		} finally {
+			writeSpy.mockRestore();
+			await stack.log.close();
+		}
+	});
 });
 
 describe("pricedRunIteration", () => {

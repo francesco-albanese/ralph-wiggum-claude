@@ -170,6 +170,33 @@ describe("streamAgentEvents — usage discrimination", () => {
 		expect(events.filter((e) => e.kind === "usage")).toHaveLength(0);
 	});
 
+	it("sanitizes malformed token counts before emitting usage", async () => {
+		const events = await pumpFixture([
+			{
+				type: "result",
+				model: "claude-opus-4-7",
+				usage: {
+					input_tokens: 12.9,
+					output_tokens: -3,
+					cache_creation_input_tokens: Number.NaN,
+					cache_read_input_tokens: 4.1,
+				},
+			},
+		]);
+
+		const usageEvents = events.filter(
+			(e): e is Extract<ParsedStreamEvent, { kind: "usage" }> =>
+				e.kind === "usage",
+		);
+		expect(usageEvents).toHaveLength(1);
+		expect(usageEvents[0]?.usage).toEqual({
+			inputTokens: 12,
+			outputTokens: 0,
+			cacheCreateTokens: 0,
+			cacheReadTokens: 4,
+		});
+	});
+
 	it("drops non-JSON lines (status noise) without throwing", async () => {
 		const stdout = new PassThrough();
 		const collected: ParsedStreamEvent[] = [];

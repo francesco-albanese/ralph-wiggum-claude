@@ -12,7 +12,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && pnpm run build:assets",
-    "build:assets": "node -e \"import('node:fs/promises').then(async ({mkdir,copyFile}) => { await mkdir('dist/pricing',{recursive:true}); await copyFile('src/pricing/pricing.json','dist/pricing/pricing.json'); })\"",
+    "build:assets": "node ./scripts/copy-assets.mjs",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

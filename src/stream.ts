@@ -79,9 +79,10 @@ export async function streamAgentText(
  * subprocess.
  *
  * Non-JSON lines and uninteresting event types are silently dropped.
- * Token-usage events are surfaced from BOTH `assistant` messages
- * (mid-stream) and the terminal `result` event — the latter is the
- * authoritative final usage for the iteration.
+ * Token-usage events are surfaced only from the terminal `result`
+ * event, which is the authoritative final usage for the iteration.
+ * Intermediate `assistant.message.usage` snapshots are intentionally
+ * ignored to avoid double-counting.
  */
 export async function* streamAgentEvents(
 	stdout: Readable,
@@ -166,10 +167,10 @@ function* parseEvent(event: unknown): Generator<ParsedStreamEvent, void, void> {
 
 function parseUsage(raw: unknown): IterationUsage | undefined {
 	if (!isRecord(raw)) return undefined;
-	const inputTokens = numberOr(raw.input_tokens, 0);
-	const outputTokens = numberOr(raw.output_tokens, 0);
-	const cacheCreateTokens = numberOr(raw.cache_creation_input_tokens, 0);
-	const cacheReadTokens = numberOr(raw.cache_read_input_tokens, 0);
+	const inputTokens = tokenCountOr(raw.input_tokens, 0);
+	const outputTokens = tokenCountOr(raw.output_tokens, 0);
+	const cacheCreateTokens = tokenCountOr(raw.cache_creation_input_tokens, 0);
+	const cacheReadTokens = tokenCountOr(raw.cache_read_input_tokens, 0);
 	if (
 		inputTokens === 0 &&
 		outputTokens === 0 &&
@@ -182,8 +183,9 @@ function parseUsage(raw: unknown): IterationUsage | undefined {
 	return { inputTokens, outputTokens, cacheCreateTokens, cacheReadTokens };
 }
 
-function numberOr(value: unknown, fallback: number): number {
-	return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+function tokenCountOr(value: unknown, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.floor(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

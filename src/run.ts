@@ -404,6 +404,9 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 			maxIter,
 			outcome,
 			totalUsage,
+			...(orchResult?.stallReason !== undefined
+				? { stallReason: orchResult.stallReason }
+				: {}),
 		});
 		await structuredLog.close();
 	}
