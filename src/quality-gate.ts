@@ -13,10 +13,15 @@
  *
  * v1 strategy: inline the skill markdown into the QG prompt rather
  * than relying on headless slash-command resolution. The follow-up
- * bead `ralph-wiggum-claude-qgs` tracks the limitation.
+ * bead `ralph-wiggum-claude-aic` tracks the limitation.
  */
 
+import { spawn } from "node:child_process";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { parseBranch } from "./branch.js";
+import { runProc } from "./proc.js";
+import { streamAgentText } from "./stream.js";
 
 /**
  * Structured output the QG agent MUST emit between the fenced markers
@@ -263,7 +268,7 @@ export function formatPrBody(pr: QgPrCopy): string {
  * agent MUST follow so `parseQgAgentOutput` succeeds.
  *
  * The skill body is inlined (v1 fallback path — see follow-up bead
- * `ralph-wiggum-claude-qgs`). When/if headless `/quality-gate`
+ * `ralph-wiggum-claude-aic`). When/if headless `/quality-gate`
  * resolution works, swap this for a `/quality-gate` invocation and
  * keep the structured-output footer.
  */
@@ -422,4 +427,326 @@ function readStringArray(value: unknown, path: string): string[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Default port wiring                                                        */
+/* -------------------------------------------------------------------------- */
+
+export type DefaultQualityGatePortsOptions = {
+	/** Worktree cwd — git/gh/agent all run here. */
+	readonly cwd: string;
+	/** Main repo root — `.claude/rules/*` is read from here. */
+	readonly repoRoot: string;
+};
+
+/** Regex that scrapes bead IDs from commit messages (project prefix style). */
+const BEAD_ID_PATTERN = /\b([a-z][a-z0-9-]*-[a-z0-9]{2,8})\b/gi;
+
+/**
+ * Wire the QG ports to real git / gh / bd / fs side effects against
+ * the supplied worktree cwd + repo root.
+ *
+ * `bd` lookups are tolerant: if the binary isn't installed, or the
+ * commands fail (no epic, no rules dir, etc.) we surface empty data
+ * rather than aborting the gate — QG must always produce a PR title
+ * + body, even on a barebones host.
+ */
+export function createDefaultQualityGatePorts(
+	opts: DefaultQualityGatePortsOptions,
+): QualityGatePorts {
+	const { cwd, repoRoot } = opts;
+
+	return {
+		captureDiff: async (input) => {
+			const { stdout } = await runProc({
+				cmd: "git",
+				args: ["diff", `${input.baseBranch}..HEAD`],
+				cwd,
+			});
+			return stdout;
+		},
+
+		listTouchedBeads: async (input) => {
+			const { stdout } = await runProc({
+				cmd: "git",
+				args: ["log", `${input.baseBranch}..HEAD`, "--format=%B"],
+				cwd,
+			});
+			const seen = new Set<string>();
+			for (const match of stdout.matchAll(BEAD_ID_PATTERN)) {
+				const id = match[1];
+				if (id !== undefined) seen.add(id.toLowerCase());
+			}
+			return Array.from(seen);
+		},
+
+		readActiveEpicNotes: async () => {
+			// Best-effort: `bd list --type=epic --status=open --json`.
+			// Tolerate a missing/broken `bd` so QG can still run on hosts
+			// where beads is optional.
+			try {
+				const { stdout } = await runProc({
+					cmd: "bd",
+					args: ["list", "--type=epic", "--status=open", "--json"],
+					cwd: repoRoot,
+					allowNonZero: true,
+				});
+				const parsed: unknown = JSON.parse(stdout || "[]");
+				if (!Array.isArray(parsed) || parsed.length === 0) {
+					return { id: undefined, notes: "" };
+				}
+				// Pick the first open epic; if multiple, the loader should be
+				// extended later (tracked via follow-up bead).
+				const first = parsed[0];
+				if (!isRecord(first)) return { id: undefined, notes: "" };
+				const rawId = first.id;
+				const id = typeof rawId === "string" ? rawId : undefined;
+				const desc =
+					typeof first.description === "string" ? first.description : "";
+				return { id, notes: desc };
+			} catch {
+				return { id: undefined, notes: "" };
+			}
+		},
+
+		readClaudeRules: async () => {
+			const rulesDir = join(repoRoot, ".claude", "rules");
+			try {
+				return await concatMarkdownTree(rulesDir);
+			} catch {
+				return "";
+			}
+		},
+
+		runAgent: async ({ cwd: agentCwd, prompt }) => {
+			const text = await spawnQualityGateAgent({ cwd: agentCwd, prompt });
+			return parseQgAgentOutput(text);
+		},
+
+		commitAutoFixes: async (_input) => {
+			const status = await runProc({
+				cmd: "git",
+				args: ["status", "--porcelain"],
+				cwd,
+			});
+			if (status.stdout.trim().length === 0) return false;
+			await runProc({ cmd: "git", args: ["add", "-A"], cwd });
+			await runProc({
+				cmd: "git",
+				args: ["commit", "-m", "chore: quality gate auto-fix"],
+				cwd,
+			});
+			return true;
+		},
+
+		pushBranch: async (input) => {
+			await runProc({
+				cmd: "git",
+				args: ["push", "origin", input.branch],
+				cwd,
+			});
+		},
+
+		createFollowUpBead: async (args) => {
+			// `bd create --type=task --title <t> --description <d>
+			//             [--parent <epic>] --labels follow-up --json`
+			// Note: the bd flag is `--labels` (plural, comma-separated),
+			// and `--parent` accepts a single issue ID. We pass the epic
+			// directly so the new bead is filed as a child task.
+			const argv = [
+				"create",
+				"--type=task",
+				"--title",
+				args.title,
+				"--description",
+				args.detail,
+				"--labels",
+				"follow-up",
+				"--json",
+			];
+			if (args.parentEpic !== undefined) {
+				argv.push("--parent", args.parentEpic);
+			}
+			const { stdout } = await runProc({
+				cmd: "bd",
+				args: argv,
+				cwd: repoRoot,
+			});
+			const parsed: unknown = JSON.parse(stdout || "{}");
+			if (isRecord(parsed) && typeof parsed.id === "string") {
+				return parsed.id;
+			}
+			throw new Error(
+				`bd create returned no id (stdout=${stdout.slice(0, 200)})`,
+			);
+		},
+
+		editPr: async ({ cwd: ghCwd, prUrl, title, body }) => {
+			await runProc({
+				cmd: "gh",
+				args: ["pr", "edit", prUrl, "--title", title, "--body", body],
+				cwd: ghCwd,
+			});
+		},
+	};
+}
+
+/**
+ * Recursively concatenate every `*.md` file under `dir` into a single
+ * string, prefixed with the relative path so the QG agent knows which
+ * rule came from where. Returns empty when the dir is missing.
+ */
+async function concatMarkdownTree(dir: string): Promise<string> {
+	const parts: string[] = [];
+	await walk(dir, dir, parts);
+	return parts.join("\n\n");
+}
+
+async function walk(
+	root: string,
+	current: string,
+	out: string[],
+): Promise<void> {
+	const entries = await readdir(current, { withFileTypes: true });
+	for (const entry of entries) {
+		const full = join(current, entry.name);
+		if (entry.isDirectory()) {
+			await walk(root, full, out);
+			continue;
+		}
+		if (!entry.name.endsWith(".md")) continue;
+		const rel = full.slice(root.length + 1);
+		const body = await readFile(full, "utf8");
+		out.push(`## ${rel}\n\n${body.trim()}`);
+	}
+}
+
+/**
+ * Hard wall-clock cap on a single QG agent invocation. Matches the
+ * default per-iteration timeout so a hung quality gate doesn't outlive
+ * the budget the user implicitly granted to any one agent call.
+ */
+const QG_AGENT_TIMEOUT_MS = 30 * 60_000;
+const QG_HARD_KILL_GRACE_MS = 5_000;
+
+/**
+ * Spawn the Claude Code CLI in headless mode, send the rendered QG
+ * prompt on stdin, stream-parse its assistant text, and resolve with
+ * the full concatenated text so `parseQgAgentOutput` can pull the
+ * structured block out of it.
+ *
+ * v1 strategy: pass the prompt as the positional `-p <prompt>` arg so
+ * we don't depend on slash-command resolution working in headless mode.
+ * The user's `/quality-gate` skill is inlined into the prompt by
+ * `buildQualityGatePrompt`. Follow-up bead `ralph-wiggum-claude-aic`
+ * tracks switching to native slash-command resolution if/when it
+ * stabilises in headless `claude`.
+ *
+ * The spawn carries a hard timeout (mirrors per-iteration timeout) so
+ * a hung QG agent can't strand the whole invocation.
+ */
+function spawnQualityGateAgent(args: {
+	readonly cwd: string;
+	readonly prompt: string;
+}): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const child = spawn(
+			"claude",
+			[
+				"-p",
+				args.prompt,
+				"--output-format",
+				"stream-json",
+				"--verbose",
+				"--dangerously-skip-permissions",
+			],
+			{ cwd: args.cwd, stdio: ["ignore", "pipe", "inherit"] },
+		);
+
+		const stdout = child.stdout;
+		if (stdout === null) {
+			reject(new Error("quality gate agent produced no stdout"));
+			return;
+		}
+
+		let collected = "";
+		let settled = false;
+		let timedOut = false;
+		let timer: NodeJS.Timeout | null = null;
+		let hardKillTimer: NodeJS.Timeout | null = null;
+
+		const clearTimers = () => {
+			if (timer !== null) clearTimeout(timer);
+			if (hardKillTimer !== null) clearTimeout(hardKillTimer);
+		};
+		const safeResolve = (value: string) => {
+			if (settled) return;
+			settled = true;
+			clearTimers();
+			resolve(value);
+		};
+		const safeReject = (err: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimers();
+			reject(err);
+		};
+
+		timer = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGTERM");
+			hardKillTimer = setTimeout(() => {
+				child.kill("SIGKILL");
+			}, QG_HARD_KILL_GRACE_MS);
+		}, QG_AGENT_TIMEOUT_MS);
+
+		const sink: NodeJS.WritableStream = {
+			write(chunk: string | Uint8Array): boolean {
+				const text =
+					typeof chunk === "string"
+						? chunk
+						: Buffer.from(chunk).toString("utf8");
+				collected += text;
+				process.stdout.write(text);
+				return true;
+			},
+			end(): void {
+				/* no-op */
+			},
+		} as unknown as NodeJS.WritableStream;
+
+		const streaming = streamAgentText(stdout, sink);
+
+		child.on("error", safeReject);
+		child.on("close", (code, signal) => {
+			streaming
+				.then(() => {
+					if (timedOut) {
+						safeReject(
+							new Error(
+								`quality gate agent timed out after ${Math.round(
+									QG_AGENT_TIMEOUT_MS / 60_000,
+								)} minutes`,
+							),
+						);
+						return;
+					}
+					if (signal !== null) {
+						safeReject(
+							new Error(`quality gate agent terminated by signal ${signal}`),
+						);
+						return;
+					}
+					if (code !== 0 && code !== null) {
+						safeReject(
+							new Error(`quality gate agent exited with code ${code}`),
+						);
+						return;
+					}
+					safeResolve(collected);
+				})
+				.catch(safeReject);
+		});
+	});
 }

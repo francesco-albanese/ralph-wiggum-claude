@@ -113,6 +113,14 @@ program
 				// value rather than a non-URL surprise.
 				console.error("ralph: agent completed with no commits to ship");
 			} else {
+				if (result.qgError !== undefined) {
+					// QG failed → PR is intentionally left DRAFT. Warn loudly
+					// so the user knows the gate didn't run cleanly and a
+					// human review is required before merging.
+					console.error(
+						`ralph: quality gate FAILED — PR left as DRAFT for human review: ${result.qgError}`,
+					);
+				}
 				console.log(result.prUrl);
 			}
 		} catch (err) {
