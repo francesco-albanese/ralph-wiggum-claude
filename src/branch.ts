@@ -29,7 +29,7 @@ export type ParsedBranch = {
 const PREFIX_LIST = ALLOWED_BRANCH_PREFIXES.join(", ");
 
 // Characters git refuses (or chokes on) in branch names.
-const FORBIDDEN_CHARS = /[~^:?*\[\\]/;
+const FORBIDDEN_CHARS = /[~^:?*[\\]/;
 
 export function parseBranch(input: string): ParsedBranch {
 	if (input.trim().length === 0) {
