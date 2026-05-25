@@ -24,6 +24,7 @@
   },
   "packageManager": "pnpm@11.1.2",
   "dependencies": {
+    "@clack/prompts": "^1.4.0",
     "commander": "^12.1.0",
     "zod": "^3.23.8"
   },
