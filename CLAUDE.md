@@ -52,18 +52,31 @@ bd close <id>         # Complete work
 
 ## Build & Test
 
-_Add your build and test commands here_
-
 ```bash
-# Example:
-# npm install
-# npm test
+pnpm install         # install dependencies
+pnpm test            # vitest (run once)
+pnpm test:watch      # vitest watch mode
+pnpm typecheck       # tsc --noEmit
+pnpm lint            # biome check
+pnpm lint:fix        # biome check --write
+pnpm build           # tsc -> dist/
 ```
 
 ## Architecture Overview
 
-_Add a brief overview of your project architecture_
+Ralph is a TypeScript CLI that drives an AI coding agent in an iteration
+loop, opens one PR per invocation, and notifies via WhatsApp at the end.
+Source lives in `src/`; tests live in `src/*.test.ts` and `tests/`.
+Bundled templates that need to ship in `dist/` are embedded as TS string
+constants (see `src/init/template.ts`), since `package.json#files`
+only includes `dist/`.
 
 ## Conventions & Patterns
 
-_Add your project-specific conventions here_
+- ESM, Node >= 20, pnpm. Always use `pnpm` (never `npm` / `yarn`).
+- Biome for lint + format (`pnpm lint`, `pnpm lint:fix`).
+- TypeScript strict mode; no `any`; prefer `type` over `interface`.
+- Vertical-slice tests via vitest — favour pure functions + thin IO
+  shells so tests don't need to mock subprocesses or prompts.
+- Issue tracker: beads (`bd`) — see the section above. No TodoWrite, no
+  markdown TODOs.
