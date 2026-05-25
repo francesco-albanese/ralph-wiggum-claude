@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { cleanup, createDefaultPorts, formatCleanupReport } from "./cleanup.js";
+import { runInit } from "./init/index.js";
 import { runProc } from "./proc.js";
 import { captureRepoRoot, type RunOptions, runCommand } from "./run.js";
 
@@ -166,6 +167,32 @@ program
 				force: raw.force === true,
 			});
 			console.log(formatCleanupReport(report));
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`ralph: ${msg}`);
+			process.exit(1);
+		}
+	});
+
+export type RawInitOptions = {
+	readonly force?: boolean;
+	readonly noEditor?: boolean;
+};
+
+program
+	.command("init")
+	.description(
+		"Scaffold .ralph/ config + prompt + .env.example in the current project",
+	)
+	.option("--force", "Overwrite existing files without prompting", false)
+	.option("--no-editor", "Skip opening the new prompt in $EDITOR at the end")
+	.action(async (raw: RawInitOptions) => {
+		try {
+			await runInit({
+				cwd: process.cwd(),
+				force: raw.force === true,
+				openEditor: raw.noEditor !== true,
+			});
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.error(`ralph: ${msg}`);
