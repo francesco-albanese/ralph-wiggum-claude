@@ -3,6 +3,11 @@ import { parseBranch } from "./branch.js";
 import { type IterationResult, runIteration } from "./iteration.js";
 import { runInvocation } from "./loop.js";
 import { runProc } from "./proc.js";
+import {
+	createDefaultQualityGatePorts,
+	type QualityGateReport,
+	runQualityGate,
+} from "./quality-gate.js";
 import { type Worktree, WorktreeManager } from "./worktree.js";
 
 export interface RunOptions {
@@ -35,6 +40,24 @@ export interface Orchestrator {
 	pushBranch: (branch: string) => Promise<void>;
 	createDraftPr: (args: { base: string; head: string }) => Promise<string>;
 	markPrReady: (url: string) => Promise<void>;
+	/**
+	 * Run the quality gate ONCE at the COMPLETE boundary, after the
+	 * iteration loop has emitted the completion signal and before the
+	 * PR is marked ready. Returns the report (title, body, follow-up
+	 * bead IDs, whether an auto-fix commit was created).
+	 *
+	 * Skipped entirely when the run stalls or is interrupted — those
+	 * states leave the PR draft for human review.
+	 *
+	 * `cwd` is closed over by the production wiring (it's the worktree
+	 * path), so callers at the orchestrate layer only supply branch
+	 * metadata + PR url.
+	 */
+	runQualityGate: (input: {
+		readonly branch: string;
+		readonly baseBranch: string;
+		readonly prUrl: string;
+	}) => Promise<QualityGateReport>;
 	/** Run one iteration. Number is 1-based. */
 	runIteration: (iteration: number) => Promise<IterationResult>;
 }
@@ -61,6 +84,20 @@ export interface OrchestrationResult {
 	/** How many iterations exited non-zero. */
 	readonly crashes: number;
 	readonly stallReason?: "max-iter" | "crash-rate";
+	/**
+	 * Quality gate report. Present iff `outcome === "complete"` AND
+	 * `prUrl` is non-empty AND the QG actually ran (it can throw — see
+	 * `qgError` for that case). Absent when QG was skipped (stalled /
+	 * interrupted / no-commits-complete) or when the run never got
+	 * far enough for a PR to exist.
+	 */
+	readonly qualityGate?: QualityGateReport;
+	/**
+	 * Set when the QG threw. The PR is intentionally left DRAFT so a
+	 * human reviews — promoting a PR to ready behind a QG failure
+	 * defeats the purpose of the gate.
+	 */
+	readonly qgError?: string;
 }
 
 /**
@@ -149,8 +186,28 @@ export async function orchestrate(
 		);
 	}
 
+	let qualityGate: QualityGateReport | undefined;
+	let qgError: string | undefined;
 	if (summary.outcome === "complete") {
-		await orch.markPrReady(prUrl);
+		// QG hook — runs EXACTLY ONCE per invocation, against the full
+		// PR diff (base..HEAD), not per iteration. If QG throws (agent
+		// crash, malformed structured output, gh failure), we leave the
+		// PR draft so a human reviews — promoting a PR to ready behind
+		// a QG failure defeats the purpose of the gate.
+		try {
+			qualityGate = await orch.runQualityGate({
+				branch,
+				baseBranch,
+				prUrl,
+			});
+		} catch (err) {
+			qgError = err instanceof Error ? err.message : String(err);
+		}
+		// markPrReady runs OUTSIDE the QG try/catch so a `gh pr ready` failure
+		// surfaces as itself and isn't mislabeled as a quality-gate failure.
+		if (qualityGate !== undefined) {
+			await orch.markPrReady(prUrl);
+		}
 	}
 	// "interrupted" and "stalled" intentionally leave the PR draft so a
 	// reviewer sees the partial work.
@@ -163,6 +220,8 @@ export async function orchestrate(
 		...(summary.stallReason !== undefined
 			? { stallReason: summary.stallReason }
 			: {}),
+		...(qualityGate !== undefined ? { qualityGate } : {}),
+		...(qgError !== undefined ? { qgError } : {}),
 	};
 	return result;
 }
@@ -187,6 +246,8 @@ export type RunCommandResult = {
 	readonly iterations: number;
 	readonly crashes: number;
 	readonly stallReason?: "max-iter" | "crash-rate";
+	readonly qualityGate?: QualityGateReport;
+	readonly qgError?: string;
 };
 
 export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
@@ -236,6 +297,11 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 					pushBranch: (branch) => defaultPushBranch(cwd, branch),
 					createDraftPr: (args) => defaultCreateDraftPr(cwd, args),
 					markPrReady: (url) => defaultMarkPrReady(cwd, url),
+					runQualityGate: (input) =>
+						runQualityGate(createDefaultQualityGatePorts({ cwd, repoRoot }), {
+							...input,
+							cwd,
+						}),
 					runIteration: () =>
 						runIteration({
 							spawn: () => spawnAgent({ cwd, signal, forceSignal }),
