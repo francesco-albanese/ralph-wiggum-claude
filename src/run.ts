@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { parseBranch } from "./branch.js";
 import { type IterationResult, runIteration } from "./iteration.js";
 import { runInvocation } from "./loop.js";
+import { runProc } from "./proc.js";
 import { type Worktree, WorktreeManager } from "./worktree.js";
 
 export interface RunOptions {
@@ -575,46 +576,4 @@ async function defaultCreateDraftPr(
 
 async function defaultMarkPrReady(cwd: string, url: string): Promise<void> {
 	await runProc({ cmd: "gh", args: ["pr", "ready", url], cwd });
-}
-
-type ProcResult = {
-	readonly stdout: string;
-	readonly stderr: string;
-};
-
-function runProc(opts: {
-	cmd: string;
-	args: readonly string[];
-	cwd?: string;
-}): Promise<ProcResult> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(opts.cmd, opts.args as string[], {
-			cwd: opts.cwd,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-
-		let stdout = "";
-		let stderr = "";
-		child.stdout?.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stderr?.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString("utf8");
-		});
-
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code === 0) {
-				resolve({ stdout, stderr });
-			} else {
-				const trimmed = stderr.trim();
-				const detail = trimmed.length > 0 ? `: ${trimmed}` : "";
-				reject(
-					new Error(
-						`${opts.cmd} ${opts.args.join(" ")} exited with code ${code}${detail}`,
-					),
-				);
-			}
-		});
-	});
 }

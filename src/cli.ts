@@ -2,6 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { cleanup, createDefaultPorts, formatCleanupReport } from "./cleanup.js";
+import { runProc } from "./proc.js";
 import { captureRepoRoot, type RunOptions, runCommand } from "./run.js";
 
 const DEFAULT_MAX_ITER = 10;
@@ -166,38 +167,18 @@ program
 	});
 
 async function captureCurrentBranch(repoRoot: string): Promise<string> {
-	const { spawn } = await import("node:child_process");
-	return new Promise((resolve, reject) => {
-		const child = spawn("git", ["branch", "--show-current"], {
-			cwd: repoRoot,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		let stdout = "";
-		let stderr = "";
-		child.stdout.on("data", (c: Buffer) => {
-			stdout += c.toString("utf8");
-		});
-		child.stderr.on("data", (c: Buffer) => {
-			stderr += c.toString("utf8");
-		});
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code !== 0) {
-				reject(new Error(`git branch --show-current failed: ${stderr.trim()}`));
-				return;
-			}
-			const b = stdout.trim();
-			if (b.length === 0) {
-				reject(
-					new Error(
-						"could not determine current branch (detached HEAD?); pass --base <name>",
-					),
-				);
-				return;
-			}
-			resolve(b);
-		});
+	const { stdout } = await runProc({
+		cmd: "git",
+		args: ["branch", "--show-current"],
+		cwd: repoRoot,
 	});
+	const branch = stdout.trim();
+	if (branch.length === 0) {
+		throw new Error(
+			"could not determine current branch (detached HEAD?); pass --base <name>",
+		);
+	}
+	return branch;
 }
 
 // Only auto-parse argv when this file is the entry point. Importing

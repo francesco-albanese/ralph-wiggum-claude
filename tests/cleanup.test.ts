@@ -179,14 +179,14 @@ describe("cleanup (pure orchestration)", () => {
 		]);
 	});
 
-	it("classifies squash-merged branches as safe via contentMergedToRemote", async () => {
-		const deleted: string[] = [];
+	it("classifies squash-merged branches as safe and deletes them with -D (git's -d would refuse)", async () => {
+		const deleted: { branch: string; force: boolean }[] = [];
 		const ports = fakePorts({
 			listLocalBranches: async () => ["feat/squashed"],
 			isAncestorOfRemote: async () => false,
 			contentMergedToRemote: async () => true,
-			deleteBranch: async (b) => {
-				deleted.push(b);
+			deleteBranch: async (branch, force) => {
+				deleted.push({ branch, force });
 			},
 		});
 
@@ -195,7 +195,27 @@ describe("cleanup (pure orchestration)", () => {
 		expect(report.candidates).toEqual([
 			{ branch: "feat/squashed", status: "squash-merged" },
 		]);
-		expect(deleted).toEqual(["feat/squashed"]);
+		// Squash-merge → git's SHA-ancestry check rejects `-d`. Our cherry
+		// check has already proved content equivalence, so `-D` is correct.
+		expect(deleted).toEqual([{ branch: "feat/squashed", force: true }]);
+	});
+
+	it("uses -d (not -D) for fast-forward-merged branches", async () => {
+		// Inverse of the squash-merge case: fast-forward merges ARE
+		// SHA-reachable from origin/<base>, so git's safer `-d` works.
+		// Using `-D` everywhere would silently delete branches a refined
+		// classifier later marks unsafe — `-d` is a final backstop.
+		const deleted: { branch: string; force: boolean }[] = [];
+		const ports = fakePorts({
+			listLocalBranches: async () => ["feat/ff"],
+			isAncestorOfRemote: async () => true,
+			deleteBranch: async (branch, force) => {
+				deleted.push({ branch, force });
+			},
+		});
+
+		await cleanup(ports, { base: "main", apply: true });
+		expect(deleted).toEqual([{ branch: "feat/ff", force: false }]);
 	});
 
 	it("--branch <name> targets a single branch without scanning all locals", async () => {
@@ -274,13 +294,18 @@ describe("cleanup (real git)", () => {
 		git(repo, ["push", "-q", "origin", "main"]);
 
 		const ports = createDefaultPorts({ repoRoot: repo });
-		const report = await cleanup(ports, { base: "main" });
+		const report = await cleanup(ports, { base: "main", apply: true });
 
 		const candidate = report.candidates.find(
 			(c) => c.branch === "feat/squash",
 		);
 		expect(candidate).toBeDefined();
 		expect(candidate?.status).toBe("squash-merged");
+		// End-to-end: squash-merge classification must drive an actual
+		// `git branch -d` so cleanup --apply genuinely reclaims the ref,
+		// not just paints it green in the report.
+		expect(report.deleted).toContain("feat/squash");
+		expect(git(repo, ["branch", "--list", "feat/squash"]).trim()).toBe("");
 	});
 
 	it("refuses to delete a branch with unpushed commits without --force", async () => {

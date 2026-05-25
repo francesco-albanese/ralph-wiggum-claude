@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { runProc } from "./proc.js";
 
 /**
  * Categorisation of a single local branch for cleanup purposes.
@@ -135,7 +135,13 @@ export async function cleanup(
 				});
 				continue;
 			}
-			await ports.deleteBranch(c.branch, force || c.status === "unpushed");
+			// `git branch -d` only recognises fast-forward merges.
+			// squash-merged branches and (force-allowed) unpushed branches
+			// need `-D` because git's safety check is SHA-ancestry-based,
+			// not content-based — our own classification (via `git cherry`
+			// or `--force`) is what makes the delete safe here.
+			const needsForceDelete = c.status !== "merged-fast-forward";
+			await ports.deleteBranch(c.branch, needsForceDelete);
 			deleted.push(c.branch);
 		}
 	}
@@ -158,12 +164,21 @@ export function createDefaultPorts(opts: DefaultPortsOptions): CleanupPorts {
 	const cwd = opts.repoRoot;
 	const remote = opts.remote ?? "origin";
 
+	const git = (args: readonly string[], o: { allowNonZero?: boolean } = {}) =>
+		runProc({
+			cmd: "git",
+			args,
+			cwd,
+			...(o.allowNonZero === true ? { allowNonZero: true } : {}),
+		});
+
 	return {
 		listLocalBranches: async () => {
-			const { stdout } = await git({
-				cwd,
-				args: ["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
-			});
+			const { stdout } = await git([
+				"for-each-ref",
+				"--format=%(refname:short)",
+				"refs/heads/",
+			]);
 			return stdout
 				.split(/\r?\n/)
 				.map((s) => s.trim())
@@ -172,10 +187,7 @@ export function createDefaultPorts(opts: DefaultPortsOptions): CleanupPorts {
 		listCheckedOutBranches: async () => {
 			// `git worktree list --porcelain` emits `branch refs/heads/<name>`
 			// for each attached worktree; detached worktrees emit `detached`.
-			const { stdout } = await git({
-				cwd,
-				args: ["worktree", "list", "--porcelain"],
-			});
+			const { stdout } = await git(["worktree", "list", "--porcelain"]);
 			const out: string[] = [];
 			for (const line of stdout.split(/\r?\n/)) {
 				const m = line.match(/^branch refs\/heads\/(.+)$/);
@@ -185,11 +197,10 @@ export function createDefaultPorts(opts: DefaultPortsOptions): CleanupPorts {
 		},
 		isAncestorOfRemote: async (branch, base) => {
 			// Exit 0 iff <branch> is reachable from origin/<base>.
-			const { code } = await git({
-				cwd,
-				args: ["merge-base", "--is-ancestor", branch, `${remote}/${base}`],
-				allowNonZero: true,
-			});
+			const { code } = await git(
+				["merge-base", "--is-ancestor", branch, `${remote}/${base}`],
+				{ allowNonZero: true },
+			);
 			return code === 0;
 		},
 		contentMergedToRemote: async (branch, base) => {
@@ -198,64 +209,15 @@ export function createDefaultPorts(opts: DefaultPortsOptions): CleanupPorts {
 			//   `- <sha>` for commits with a content-equivalent on origin
 			//     (i.e., squash- or rebase-merged).
 			// Branch is fully on origin iff no `+` lines are produced.
-			const { stdout } = await git({
-				cwd,
-				args: ["cherry", `${remote}/${base}`, branch],
-			});
+			const { stdout } = await git(["cherry", `${remote}/${base}`, branch]);
 			const lines = stdout.split(/\r?\n/).filter((l) => l.length > 0);
 			if (lines.length === 0) return true;
 			return lines.every((l) => !l.startsWith("+"));
 		},
 		deleteBranch: async (branch, force) => {
-			await git({
-				cwd,
-				args: ["branch", force ? "-D" : "-d", branch],
-			});
+			await git(["branch", force ? "-D" : "-d", branch]);
 		},
 	};
-}
-
-type GitResult = {
-	readonly stdout: string;
-	readonly stderr: string;
-	readonly code: number;
-};
-
-function git(opts: {
-	cwd: string;
-	args: readonly string[];
-	allowNonZero?: boolean;
-}): Promise<GitResult> {
-	return new Promise((resolve, reject) => {
-		const child = spawn("git", opts.args as string[], {
-			cwd: opts.cwd,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-
-		let stdout = "";
-		let stderr = "";
-		child.stdout?.on("data", (c: Buffer) => {
-			stdout += c.toString("utf8");
-		});
-		child.stderr?.on("data", (c: Buffer) => {
-			stderr += c.toString("utf8");
-		});
-
-		child.on("error", reject);
-		child.on("close", (code) => {
-			const exit = code ?? 0;
-			if (exit !== 0 && opts.allowNonZero !== true) {
-				const detail = stderr.trim().length > 0 ? `: ${stderr.trim()}` : "";
-				reject(
-					new Error(
-						`git ${opts.args.join(" ")} exited with code ${exit}${detail}`,
-					),
-				);
-				return;
-			}
-			resolve({ stdout, stderr, code: exit });
-		});
-	});
 }
 
 /**
