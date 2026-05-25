@@ -190,6 +190,11 @@ export async function runQualityGate(
 
 	const followUpBeadIds: string[] = [];
 	for (const finding of agentOut.followUps) {
+		if (finding.severity === "high") {
+			throw new Error(
+				"quality gate returned a high-severity follow-up; high findings must be auto-fixed before passing",
+			);
+		}
 		const beadId = await ports.createFollowUpBead({
 			title: finding.title,
 			detail: finding.detail ?? "",
@@ -651,18 +656,22 @@ function spawnQualityGateAgent(args: {
 	readonly prompt: string;
 }): Promise<string> {
 	return new Promise((resolve, reject) => {
+		// Stream the prompt via stdin rather than argv — the prompt embeds the
+		// full PR diff and a long diff could exceed the OS argv limit (E2BIG)
+		// before claude even runs. Claude headless reads stdin when -p has no
+		// value (cap ~10MB per docs).
 		const child = spawn(
 			"claude",
 			[
 				"-p",
-				args.prompt,
 				"--output-format",
 				"stream-json",
 				"--verbose",
 				"--dangerously-skip-permissions",
 			],
-			{ cwd: args.cwd, stdio: ["ignore", "pipe", "inherit"] },
+			{ cwd: args.cwd, stdio: ["pipe", "pipe", "inherit"] },
 		);
+		child.stdin?.end(args.prompt);
 
 		const stdout = child.stdout;
 		if (stdout === null) {

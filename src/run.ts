@@ -200,9 +200,13 @@ export async function orchestrate(
 				baseBranch,
 				prUrl,
 			});
-			await orch.markPrReady(prUrl);
 		} catch (err) {
 			qgError = err instanceof Error ? err.message : String(err);
+		}
+		// markPrReady runs OUTSIDE the QG try/catch so a `gh pr ready` failure
+		// surfaces as itself and isn't mislabeled as a quality-gate failure.
+		if (qualityGate !== undefined) {
+			await orch.markPrReady(prUrl);
 		}
 	}
 	// "interrupted" and "stalled" intentionally leave the PR draft so a

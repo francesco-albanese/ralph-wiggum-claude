@@ -329,4 +329,24 @@ describe("runQualityGate", () => {
 		expect(createFollowUpBead).not.toHaveBeenCalled();
 		expect(report.followUpBeadIds).toEqual([]);
 	});
+
+	it("throws when the agent returns a high-severity follow-up", async () => {
+		// High severity must be auto-fixed in place by the agent, not filed as
+		// a bead. If one slips through, fail the gate so run.ts leaves the PR
+		// draft instead of promoting it to ready.
+		const createFollowUpBead = vi.fn(async () => "x-1");
+		const agentOut: QgAgentOutput = {
+			pr: { subject: "x", summary: "One. Two.", closedBeads: [] },
+			followUps: [{ severity: "high", title: "auth bypass" }],
+		};
+		const ports = makePorts({
+			runAgent: vi.fn(async () => agentOut) as QualityGatePorts["runAgent"],
+			createFollowUpBead,
+		});
+
+		await expect(runQualityGate(ports, INPUT)).rejects.toThrow(
+			/high-severity/i,
+		);
+		expect(createFollowUpBead).not.toHaveBeenCalled();
+	});
 });
