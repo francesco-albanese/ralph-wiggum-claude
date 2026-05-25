@@ -13,41 +13,40 @@ interface FakeChild extends EventEmitter {
 	kill: (sig?: NodeJS.Signals) => boolean;
 }
 
-function makeFakeChild(): FakeChild & {
+type FakeChildExt = FakeChild & {
 	emitStdout(chunk: string): void;
-	finish(code: number): void;
+	finish(code: number | null, signal?: NodeJS.Signals): void;
 	wasKilled(): boolean;
-} {
-	const emitter = new EventEmitter() as FakeChild & {
-		emitStdout(chunk: string): void;
-		finish(code: number): void;
-		wasKilled(): boolean;
-	};
+	killSignals(): readonly NodeJS.Signals[];
+};
+
+interface FakeChildOptions {
+	/** If true, `kill()` returns false (process refuses to die). */
+	readonly ignoreKill?: boolean;
+}
+
+function makeFakeChild(opts: FakeChildOptions = {}): FakeChildExt {
+	const emitter = new EventEmitter() as FakeChildExt;
 	const stdout = new PassThrough();
 	emitter.stdout = stdout;
-	let killed = false;
-	emitter.kill = (_sig?: NodeJS.Signals) => {
-		killed = true;
-		return true;
+	const signals: NodeJS.Signals[] = [];
+	emitter.kill = (sig?: NodeJS.Signals) => {
+		signals.push(sig ?? "SIGTERM");
+		return !opts.ignoreKill;
 	};
 	emitter.emitStdout = (chunk: string) => {
 		stdout.write(chunk);
 	};
-	emitter.finish = (code: number) => {
+	emitter.finish = (code: number | null, signal?: NodeJS.Signals) => {
 		stdout.end();
-		emitter.emit("close", code);
+		emitter.emit("close", code, signal ?? null);
 	};
-	emitter.wasKilled = () => killed;
+	emitter.wasKilled = () => signals.length > 0;
+	emitter.killSignals = () => signals;
 	return emitter;
 }
 
-const asChild = (
-	c: FakeChild & {
-		emitStdout(chunk: string): void;
-		finish(code: number): void;
-		wasKilled(): boolean;
-	},
-) => c as unknown as ChildProcess;
+const asChild = (c: FakeChildExt) => c as unknown as ChildProcess;
 
 describe("runIteration", () => {
 	it("returns outcome 'continue' when the agent exits 0 without the signal", async () => {
@@ -110,11 +109,59 @@ describe("runIteration", () => {
 		vi.advanceTimersByTime(61);
 		// The implementation must have asked the child to die.
 		expect(child.wasKilled()).toBe(true);
+		expect(child.killSignals()).toContain("SIGTERM");
 		// Simulate the SIGTERM propagating: process exits with non-zero.
-		child.finish(143);
+		child.finish(143, "SIGTERM");
 
 		await expect(result).resolves.toMatchObject({ outcome: "timed-out" });
 		vi.useRealTimers();
+	});
+
+	it("escalates to SIGKILL when the child ignores SIGTERM, and still resolves 'timed-out'", async () => {
+		vi.useFakeTimers();
+		const child = makeFakeChild({ ignoreKill: true });
+		const result = runIteration({
+			spawn: () => asChild(child),
+			out: new PassThrough(),
+			timeoutMs: 60,
+			hardKillGraceMs: 100,
+		});
+
+		vi.advanceTimersByTime(61);
+		expect(child.killSignals()).toEqual(["SIGTERM"]);
+
+		// SIGTERM is swallowed. After the hard-kill grace, SIGKILL fires.
+		vi.advanceTimersByTime(101);
+		expect(child.killSignals()).toEqual(["SIGTERM", "SIGKILL"]);
+
+		// Child STILL refuses to close (truly unkillable: D-state / zombie).
+		// After the safety grace, runIteration resolves anyway so the loop
+		// is not pinned forever on a hung child.
+		vi.advanceTimersByTime(101);
+		await expect(result).resolves.toMatchObject({
+			outcome: "timed-out",
+			exitCode: null,
+		});
+		vi.useRealTimers();
+	});
+
+	it("returns outcome 'signal-killed' when an external signal terminates the child without a timeout firing", async () => {
+		const child = makeFakeChild();
+		const result = runIteration({
+			spawn: () => asChild(child),
+			out: new PassThrough(),
+		});
+
+		// Parent process (or supervisor) sends SIGINT to the child; close
+		// fires with code=null, signal="SIGINT". This must NOT be counted
+		// as "crashed" — otherwise an external Ctrl-C would feed the
+		// crash-rate stall.
+		child.finish(null, "SIGINT");
+
+		await expect(result).resolves.toMatchObject({
+			outcome: "signal-killed",
+			exitCode: null,
+		});
 	});
 
 	it("honours a custom completion regex passed via --complete-signal", async () => {

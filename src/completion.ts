@@ -5,6 +5,13 @@
  */
 export const DEFAULT_COMPLETE_SIGNAL = "<promise>COMPLETE</promise>";
 
+/**
+ * Floor on the retained buffer tail. Big enough to span the default
+ * sentinel comfortably and absorb a realistic chunked stream from
+ * the agent without re-scanning megabytes on each push.
+ */
+const MIN_BUFFER_TAIL = 4_096;
+
 export interface CompletionDetector {
 	/**
 	 * Feed a chunk of agent text. Returns true on the first chunk
@@ -30,13 +37,20 @@ export function createCompletionDetector(
 	options: CompletionDetectorOptions = {},
 ): CompletionDetector {
 	const pattern = options.pattern ?? DEFAULT_COMPLETE_SIGNAL;
+	// Cap the retained buffer to MIN_BUFFER_TAIL OR the pattern length
+	// (whichever is larger). Bounds memory on long streams and keeps
+	// per-chunk match work O(maxTail) instead of O(stream length).
+	const patternLen =
+		typeof pattern === "string" ? pattern.length : pattern.source.length;
+	const maxTail = Math.max(MIN_BUFFER_TAIL, patternLen);
+
 	let buffer = "";
 	let matched = false;
 
 	return {
 		push(chunk: string): boolean {
 			if (matched) return true;
-			buffer += chunk;
+			buffer = (buffer + chunk).slice(-maxTail);
 			const hit =
 				typeof pattern === "string"
 					? buffer.includes(pattern)

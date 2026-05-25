@@ -37,4 +37,20 @@ describe("CompletionDetector", () => {
 		expect(second).toBe(true);
 		expect(detector.matched).toBe(true);
 	});
+
+	it("still matches after a long chaff stream (buffer stays bounded)", () => {
+		const detector = createCompletionDetector();
+
+		// Simulate ~1 MB of chaff in 100 KB chunks. With an unbounded
+		// buffer this would be O(n²) per push and balloon memory; the
+		// bounded tail keeps each push fast and finite.
+		const chaff = "x".repeat(100_000);
+		for (let i = 0; i < 10; i += 1) {
+			expect(detector.push(chaff)).toBe(false);
+		}
+
+		// The sentinel arriving after the chaff must still be detected.
+		expect(detector.push("done <promise>COMPLETE</promise>")).toBe(true);
+		expect(detector.matched).toBe(true);
+	});
 });

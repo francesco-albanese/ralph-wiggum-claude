@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { type RunOptions, runCommand } from "./run.js";
 
@@ -90,7 +91,15 @@ program
 		try {
 			const opts = parseRunOptions(raw);
 			const prUrl = await runCommand(opts);
-			console.log(prUrl);
+			if (prUrl.length === 0) {
+				// Agent completed with no commits — a legitimate no-op
+				// success, distinct from a failure. Print to stderr so
+				// scripts capturing stdout for the PR URL get an empty
+				// value rather than a non-URL surprise.
+				console.error("ralph: agent completed with no commits to ship");
+			} else {
+				console.log(prUrl);
+			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.error(`ralph: ${msg}`);
@@ -100,8 +109,11 @@ program
 
 // Only auto-parse argv when this file is the entry point. Importing
 // `cli.ts` (e.g. from tests) must not have side effects.
+// `pathToFileURL` is used (vs. string-concatenating `file://`) so the
+// check survives percent-encoded paths, Windows drive letters, and
+// symlinked bins (pnpm/npm shims).
 const entry = process.argv[1];
-if (entry !== undefined && import.meta.url === `file://${entry}`) {
+if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
 	program.parseAsync(process.argv).catch((err: unknown) => {
 		console.error(err);
 		process.exit(1);

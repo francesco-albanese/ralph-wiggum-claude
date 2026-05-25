@@ -6,7 +6,8 @@ export type IterationOutcome =
 	| "complete"
 	| "continue"
 	| "crashed"
-	| "timed-out";
+	| "timed-out"
+	| "signal-killed";
 
 export interface IterationResult {
 	readonly outcome: IterationOutcome;
@@ -31,7 +32,16 @@ export interface RunIterationOptions {
 	readonly completeSignal?: RegExp;
 	/** Per-iteration timeout in ms. If exceeded, SIGTERM the agent. */
 	readonly timeoutMs?: number;
+	/**
+	 * Grace window (ms) between SIGTERM and SIGKILL when a timeout fires.
+	 * After SIGKILL we wait the same grace once more before resolving as
+	 * "timed-out" with no further wait on `close`, so an unkillable
+	 * (zombie/D-state) child cannot hang the loop indefinitely.
+	 */
+	readonly hardKillGraceMs?: number;
 }
+
+const DEFAULT_HARD_KILL_GRACE_MS = 5_000;
 
 /**
  * Run a single iteration: spawn the agent, stream its text to `out`,
@@ -72,34 +82,69 @@ export function runIteration(
 
 		const streaming = streamAgentText(stdout, sink);
 
+		const hardKillGraceMs = opts.hardKillGraceMs ?? DEFAULT_HARD_KILL_GRACE_MS;
+
 		let timedOut = false;
-		const timer =
-			opts.timeoutMs !== undefined
-				? setTimeout(() => {
-						timedOut = true;
-						child.kill("SIGTERM");
-					}, opts.timeoutMs)
-				: null;
+		let settled = false;
+		let timer: NodeJS.Timeout | null = null;
+		let hardKillTimer: NodeJS.Timeout | null = null;
+		let safetyTimer: NodeJS.Timeout | null = null;
+
+		const clearTimers = () => {
+			if (timer !== null) clearTimeout(timer);
+			if (hardKillTimer !== null) clearTimeout(hardKillTimer);
+			if (safetyTimer !== null) clearTimeout(safetyTimer);
+		};
+		const safeResolve = (r: IterationResult) => {
+			if (settled) return;
+			settled = true;
+			clearTimers();
+			resolve(r);
+		};
+		const safeReject = (err: Error) => {
+			if (settled) return;
+			settled = true;
+			clearTimers();
+			reject(err);
+		};
+
+		if (opts.timeoutMs !== undefined) {
+			timer = setTimeout(() => {
+				timedOut = true;
+				child.kill("SIGTERM");
+				hardKillTimer = setTimeout(() => {
+					child.kill("SIGKILL");
+					// If even SIGKILL doesn't yield a `close` event (truly
+					// unkillable — kernel zombie, D-state), resolve anyway
+					// after another grace window so the loop can advance.
+					safetyTimer = setTimeout(() => {
+						safeResolve({ outcome: "timed-out", exitCode: null });
+					}, hardKillGraceMs);
+				}, hardKillGraceMs);
+			}, opts.timeoutMs);
+		}
 
 		child.on("error", (err) => {
-			if (timer !== null) clearTimeout(timer);
-			reject(err);
+			safeReject(err);
 		});
-		child.on("close", (code) => {
-			if (timer !== null) clearTimeout(timer);
+		child.on("close", (code, signal) => {
 			streaming
 				.then(() => {
 					if (timedOut) {
-						resolve({ outcome: "timed-out", exitCode: code });
+						safeResolve({ outcome: "timed-out", exitCode: code });
 					} else if (detector.matched) {
-						resolve({ outcome: "complete", exitCode: code });
+						safeResolve({ outcome: "complete", exitCode: code });
 					} else if (code === 0) {
-						resolve({ outcome: "continue", exitCode: code });
+						safeResolve({ outcome: "continue", exitCode: code });
+					} else if (signal !== null) {
+						// Externally killed by signal (e.g. parent abort)
+						// without our timeout firing: don't count as crashed.
+						safeResolve({ outcome: "signal-killed", exitCode: code });
 					} else {
-						resolve({ outcome: "crashed", exitCode: code });
+						safeResolve({ outcome: "crashed", exitCode: code });
 					}
 				})
-				.catch(reject);
+				.catch(safeReject);
 		});
 	});
 }

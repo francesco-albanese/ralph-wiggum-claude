@@ -63,7 +63,7 @@ describe("orchestrate", () => {
 		expect(result.prUrl).toBe("https://github.com/x/y/pull/1");
 	});
 
-	it("refuses to open a PR when no iteration produced commits", async () => {
+	it("refuses to open a PR when a STALLED invocation produced no commits", async () => {
 		const orch = makeOrchestrator({
 			commitsAhead: vi.fn(async () => 0),
 			runIteration: vi.fn(async () => ({
@@ -76,6 +76,30 @@ describe("orchestrate", () => {
 			orchestrate(orch, { branch: "feat/foo", maxIter: 2 }),
 		).rejects.toThrow(/no commits/i);
 
+		expect(orch.createDraftPr).not.toHaveBeenCalled();
+		expect(orch.markPrReady).not.toHaveBeenCalled();
+	});
+
+	it("treats COMPLETE + no commits as a no-op success (empty prUrl, no PR opened)", async () => {
+		// Agent legitimately completed (e.g. inspected the repo, decided
+		// nothing needed doing, emitted the sentinel). Not a failure —
+		// we should not throw, and we should not open an empty PR.
+		const orch = makeOrchestrator({
+			commitsAhead: vi.fn(async () => 0),
+			runIteration: vi.fn(async () => ({
+				outcome: "complete",
+				exitCode: 0,
+			})) as Orchestrator["runIteration"],
+		});
+
+		const result = await orchestrate(orch, {
+			branch: "feat/foo",
+			maxIter: 2,
+		});
+
+		expect(result.outcome).toBe("complete");
+		expect(result.prUrl).toBe("");
+		expect(orch.pushBranch).not.toHaveBeenCalled();
 		expect(orch.createDraftPr).not.toHaveBeenCalled();
 		expect(orch.markPrReady).not.toHaveBeenCalled();
 	});

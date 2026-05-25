@@ -45,6 +45,15 @@ export interface OrchestrationOptions {
 
 export interface OrchestrationResult {
 	readonly outcome: "complete" | "stalled";
+	/**
+	 * URL of the opened draft (or ready) PR.
+	 *
+	 * Empty string when the agent legitimately completed with zero
+	 * commits (a "nothing-to-do" success — agent inspected the repo,
+	 * decided no work was needed, emitted the completion signal).
+	 * Callers should treat empty + outcome="complete" as a no-op
+	 * success, not a failure.
+	 */
 	readonly prUrl: string;
 	readonly iterations: number;
 	readonly stallReason?: "max-iter" | "crash-rate";
@@ -58,6 +67,10 @@ export interface OrchestrationResult {
  *   4. run the iteration loop (completion / max-iter / crash-rate)
  *   5. if any commits exist, push and open a draft PR
  *   6. mark the PR ready iff the invocation completed via the signal
+ *
+ * Zero-commits + outcome="complete" is treated as a no-op success
+ * (no PR opened, empty `prUrl`). Zero-commits + stalled throws — a
+ * stalled run that produced nothing is a real failure to ship.
  */
 export async function orchestrate(
 	orch: Orchestrator,
@@ -86,6 +99,16 @@ export async function orchestrate(
 
 	const commits = await orch.commitsAhead(baseBranch);
 	if (commits === 0) {
+		if (summary.outcome === "complete") {
+			// Agent completed cleanly with nothing to ship. Not a failure;
+			// surface as a no-op success so the CLI can print a clear
+			// message instead of an error.
+			return {
+				outcome: "complete",
+				prUrl: "",
+				iterations: summary.iterations,
+			};
+		}
 		throw new Error(
 			`agent produced no commits on ${branch}; refusing to open an empty PR`,
 		);
