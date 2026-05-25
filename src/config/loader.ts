@@ -11,9 +11,9 @@ import type { RalphSecrets } from "./schema.js";
 // `import { loadConfig, DEFAULT_CONFIG, ... } from "./config/loader.js"`
 // without knowing which sub-module each symbol lives in.
 export { CONFIG_FILE_NAME } from "./config-file.js";
-export { ENV_FILE_NAME } from "./env-file.js";
-export { DEFAULT_CONFIG } from "./defaults.js";
 export type { CliOverrides, ResolvedConfig } from "./defaults.js";
+export { DEFAULT_CONFIG } from "./defaults.js";
+export { ENV_FILE_NAME } from "./env-file.js";
 export { ConfigError } from "./errors.js";
 
 export type LoadConfigInput = {
