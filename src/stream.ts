@@ -138,6 +138,15 @@ function* parseEvent(event: unknown): Generator<ParsedStreamEvent, void, void> {
 		// events. Claude Code emits per-message usage there which would
 		// double-count against the authoritative final `result.usage`
 		// event. Cost is computed from `result` only.
+		//
+		// Trade-off: if the agent crashes/times out before emitting
+		// `result`, the iteration's cost is reported as $0. We accept
+		// that — surfacing a partial assistant.usage snapshot as the
+		// "real" cost would be MORE misleading, and the structured
+		// log keeps every parsed event raw so a forensic reader can
+		// still recover the partial totals. See stream.test.ts for
+		// both the realistic-capture and inverse-fixture regression
+		// tests.
 		return;
 	}
 
