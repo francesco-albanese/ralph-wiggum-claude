@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { parseBranch } from "./branch.js";
 import { type IterationResult, runIteration } from "./iteration.js";
 import { runInvocation } from "./loop.js";
+import { runProc } from "./proc.js";
 import { type Worktree, WorktreeManager } from "./worktree.js";
 
 export interface RunOptions {
@@ -44,18 +45,21 @@ export interface OrchestrationOptions {
 }
 
 export interface OrchestrationResult {
-	readonly outcome: "complete" | "stalled";
+	readonly outcome: "complete" | "stalled" | "interrupted";
 	/**
 	 * URL of the opened draft (or ready) PR.
 	 *
 	 * Empty string when the agent legitimately completed with zero
 	 * commits (a "nothing-to-do" success — agent inspected the repo,
-	 * decided no work was needed, emitted the completion signal).
+	 * decided no work was needed, emitted the completion signal),
+	 * OR when an interrupt fired before any iteration produced commits.
 	 * Callers should treat empty + outcome="complete" as a no-op
 	 * success, not a failure.
 	 */
 	readonly prUrl: string;
 	readonly iterations: number;
+	/** How many iterations exited non-zero. */
+	readonly crashes: number;
 	readonly stallReason?: "max-iter" | "crash-rate";
 }
 
@@ -126,6 +130,18 @@ export async function orchestrate(
 				outcome: "complete",
 				prUrl: "",
 				iterations: summary.iterations,
+				crashes: summary.crashes,
+			};
+		}
+		if (summary.outcome === "interrupted") {
+			// Ctrl-C before any commits — no PR to open, but not a
+			// failure either. Surface the interrupt so the CLI can
+			// exit 130 with a partial summary.
+			return {
+				outcome: "interrupted",
+				prUrl: "",
+				iterations: summary.iterations,
+				crashes: summary.crashes,
 			};
 		}
 		throw new Error(
@@ -136,11 +152,14 @@ export async function orchestrate(
 	if (summary.outcome === "complete") {
 		await orch.markPrReady(prUrl);
 	}
+	// "interrupted" and "stalled" intentionally leave the PR draft so a
+	// reviewer sees the partial work.
 
 	const result: OrchestrationResult = {
 		outcome: summary.outcome,
 		prUrl,
 		iterations: summary.iterations,
+		crashes: summary.crashes,
 		...(summary.stallReason !== undefined
 			? { stallReason: summary.stallReason }
 			: {}),
@@ -162,7 +181,15 @@ export async function orchestrate(
  *   - `gh` / `git push` against the worktree's `cwd` so they affect the
  *     isolated worktree's branch, never the host
  */
-export async function runCommand(opts: RunOptions): Promise<string> {
+export type RunCommandResult = {
+	readonly outcome: "complete" | "stalled" | "interrupted";
+	readonly prUrl: string;
+	readonly iterations: number;
+	readonly crashes: number;
+	readonly stallReason?: "max-iter" | "crash-rate";
+};
+
+export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 	// Validate the branch up-front so a bad --branch fails before we
 	// touch git (matches the walking-skeleton/worktree-isolation contract).
 	parseBranch(opts.branch);
@@ -176,17 +203,18 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 	const baseBranch = await hostCaptureBaseBranch();
 	await hostEnsureCleanWorktree();
 
-	let prUrl = "";
+	let orchResult: OrchestrationResult | undefined;
 
 	const repoRoot = await captureRepoRoot();
 
-	const signalCtl = installSignalAbort();
+	const shutdown = installGracefulShutdown();
 	try {
 		await runInWorktree({
 			branch: opts.branch,
 			repoRoot,
-			signal: signalCtl.signal,
-			agent: async ({ cwd, signal }) => {
+			signal: shutdown.signal,
+			forceSignal: shutdown.forceSignal,
+			agent: async ({ cwd, signal, forceSignal }) => {
 				const orch: Orchestrator = {
 					// Base is already captured on the host; surface it to
 					// `orchestrate` unchanged.
@@ -210,7 +238,7 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 					markPrReady: (url) => defaultMarkPrReady(cwd, url),
 					runIteration: () =>
 						runIteration({
-							spawn: () => spawnAgent({ cwd, signal }),
+							spawn: () => spawnAgent({ cwd, signal, forceSignal }),
 							out: process.stdout,
 							timeoutMs,
 							...(opts.completeSignal !== undefined
@@ -219,23 +247,41 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 						}),
 				};
 
-				const result = await orchestrate(orch, {
+				orchResult = await orchestrate(orch, {
 					branch: opts.branch,
 					maxIter,
 				});
-				prUrl = result.prUrl;
 			},
 		});
 	} finally {
-		signalCtl.dispose();
+		shutdown.dispose();
 	}
 
-	return prUrl;
+	if (orchResult === undefined) {
+		// runInWorktree exited without ever calling the agent runner.
+		// Treat as interrupted-before-start so the CLI can still surface
+		// a clear status (vs. a generic crash).
+		return {
+			outcome: "interrupted",
+			prUrl: "",
+			iterations: 0,
+			crashes: 0,
+		};
+	}
+	return orchResult;
 }
 
 export type AgentContext = {
 	readonly cwd: string;
+	/** Aborts on first SIGINT/SIGTERM — agent should drain gracefully. */
 	readonly signal: AbortSignal;
+	/**
+	 * Aborts on second SIGINT/SIGTERM within the second-press window OR
+	 * when the drain timeout elapses — agent (and any child it spawned)
+	 * should be killed immediately. Distinct from `signal` so consumers
+	 * can escalate SIGTERM → SIGKILL without re-wiring listeners.
+	 */
+	readonly forceSignal: AbortSignal;
 };
 
 export type AgentRunner = (ctx: AgentContext) => Promise<void>;
@@ -245,6 +291,7 @@ export type RunInWorktreeOptions = {
 	readonly repoRoot: string;
 	readonly agent: AgentRunner;
 	readonly signal?: AbortSignal;
+	readonly forceSignal?: AbortSignal;
 };
 
 /**
@@ -266,11 +313,17 @@ export async function runInWorktree(opts: RunInWorktreeOptions): Promise<void> {
 		wt = await mgr.create(branch);
 
 		const signal = opts.signal ?? new AbortController().signal;
+		const forceSignal = opts.forceSignal ?? new AbortController().signal;
 		if (signal.aborted) {
-			throw new Error("aborted before agent could start");
+			// Already aborted by the time the worktree existed (Ctrl-C
+			// during `git worktree add`). Don't throw — let the caller's
+			// `orchResult === undefined` branch surface as `interrupted`
+			// with exit 130, not a generic crash. The worktree still
+			// cleans up via the finally below.
+			return;
 		}
 
-		await opts.agent({ cwd: wt.path, signal });
+		await opts.agent({ cwd: wt.path, signal, forceSignal });
 	} finally {
 		if (wt !== undefined) {
 			await mgr.remove(wt);
@@ -278,26 +331,125 @@ export async function runInWorktree(opts: RunInWorktreeOptions): Promise<void> {
 	}
 }
 
+export type GracefulShutdown = {
+	/** Aborts on first SIGINT/SIGTERM. */
+	readonly signal: AbortSignal;
+	/**
+	 * Aborts on second SIGINT/SIGTERM within `secondPressMs` of the first,
+	 * OR when `drainMs` elapses after the first signal without the
+	 * underlying work resolving.
+	 */
+	readonly forceSignal: AbortSignal;
+	/**
+	 * Remove all signal listeners and clear pending drain/second-press
+	 * timers. Idempotent. Always call from a `finally` so listeners do
+	 * not accumulate across repeated invocations in the same process.
+	 */
+	readonly dispose: () => void;
+};
+
+export type GracefulShutdownOptions = {
+	/**
+	 * Grace window between first signal and forced kill. Default 30s
+	 * — matches the spec for SIGTERM drain on first Ctrl-C.
+	 */
+	readonly drainMs?: number;
+	/**
+	 * Window after the first signal in which a second signal escalates
+	 * to forced kill. Default 5s. Subsequent signals outside this
+	 * window are ignored (the drain timer still escalates at drainMs).
+	 */
+	readonly secondPressMs?: number;
+	/** Where to print human-readable shutdown progress. Defaults to stderr. */
+	readonly out?: NodeJS.WritableStream;
+};
+
+const DEFAULT_DRAIN_MS = 30_000;
+const DEFAULT_SECOND_PRESS_MS = 5_000;
+
 /**
- * Wire SIGINT + SIGTERM to an AbortSignal. First signal aborts; second
- * lets the default handler kill the process for real. The returned
- * `dispose` must be called on every exit path so listeners don't
- * accumulate when ralph is invoked repeatedly in the same process.
+ * Two-stage signal handler for graceful shutdown.
+ *
+ *   1. First SIGINT/SIGTERM aborts `signal` (consumers SIGTERM their
+ *      children); a 30s drain timer is started that aborts `forceSignal`
+ *      if the underlying work hasn't unwound by then.
+ *   2. A second SIGINT/SIGTERM within 5s aborts `forceSignal` immediately
+ *      (consumers SIGKILL their children) — escape hatch for unresponsive
+ *      agents. Cleanup still runs via the caller's `finally` blocks.
+ *
+ * Listeners are registered via `process.on` (not `once`) so a second
+ * press is observed; `dispose()` removes them. Always call `dispose()`
+ * from a `finally` so listeners do not leak when ralph runs inside a
+ * long-lived process or test suite.
  */
-function installSignalAbort(): { signal: AbortSignal; dispose: () => void } {
+export function installGracefulShutdown(
+	opts: GracefulShutdownOptions = {},
+): GracefulShutdown {
+	const drainMs = opts.drainMs ?? DEFAULT_DRAIN_MS;
+	const secondPressMs = opts.secondPressMs ?? DEFAULT_SECOND_PRESS_MS;
+	const out = opts.out ?? process.stderr;
+
 	const ac = new AbortController();
+	const forceAc = new AbortController();
+
+	let firstSignalAt = 0;
+	let drainTimer: NodeJS.Timeout | null = null;
+	let secondPressTimer: NodeJS.Timeout | null = null;
+	let disposed = false;
+
+	const writeLine = (line: string) => {
+		out.write(`${line}\n`);
+	};
+
 	const dispose = () => {
+		if (disposed) return;
+		disposed = true;
 		process.off("SIGINT", onSignal);
 		process.off("SIGTERM", onSignal);
+		if (drainTimer !== null) clearTimeout(drainTimer);
+		if (secondPressTimer !== null) clearTimeout(secondPressTimer);
+		drainTimer = null;
+		secondPressTimer = null;
 	};
+
+	const escalate = (reason: string) => {
+		if (forceAc.signal.aborted) return;
+		writeLine(`ralph: ${reason}, escalating to force-kill...`);
+		forceAc.abort();
+	};
+
 	const onSignal = (sig: NodeJS.Signals) => {
-		dispose();
-		console.error(`\nralph: received ${sig}, cleaning up...`);
-		ac.abort();
+		const now = Date.now();
+		if (firstSignalAt === 0) {
+			firstSignalAt = now;
+			writeLine(
+				`\nralph: received ${sig}, draining for up to ${Math.round(
+					drainMs / 1000,
+				)}s (press Ctrl-C again to force-kill)...`,
+			);
+			ac.abort();
+			drainTimer = setTimeout(
+				() => escalate(`drain timeout (${Math.round(drainMs / 1000)}s)`),
+				drainMs,
+			);
+			// Unref so a pending drain timer doesn't keep the event loop
+			// alive after work resolves naturally.
+			drainTimer.unref?.();
+			secondPressTimer = setTimeout(() => {
+				secondPressTimer = null;
+			}, secondPressMs);
+			secondPressTimer.unref?.();
+		} else if (
+			secondPressTimer !== null &&
+			now - firstSignalAt <= secondPressMs
+		) {
+			escalate(`second ${sig} within ${Math.round(secondPressMs / 1000)}s`);
+		}
 	};
-	process.once("SIGINT", onSignal);
-	process.once("SIGTERM", onSignal);
-	return { signal: ac.signal, dispose };
+
+	process.on("SIGINT", onSignal);
+	process.on("SIGTERM", onSignal);
+	return { signal: ac.signal, forceSignal: forceAc.signal, dispose };
 }
 
 async function hostEnsureCleanWorktree(): Promise<void> {
@@ -367,17 +519,23 @@ function spawnAgent(ctx: AgentContext): ChildProcess {
 		{ cwd: ctx.cwd, stdio: ["inherit", "pipe", "inherit"] },
 	);
 
-	const onAbort = () => {
+	const onTerm = () => {
 		child.kill("SIGTERM");
 	};
-	if (ctx.signal.aborted) {
-		onAbort();
-	} else {
-		ctx.signal.addEventListener("abort", onAbort, { once: true });
-		child.once("close", () => {
-			ctx.signal.removeEventListener("abort", onAbort);
-		});
-	}
+	const onKill = () => {
+		child.kill("SIGKILL");
+	};
+
+	if (ctx.signal.aborted) onTerm();
+	else ctx.signal.addEventListener("abort", onTerm, { once: true });
+
+	if (ctx.forceSignal.aborted) onKill();
+	else ctx.forceSignal.addEventListener("abort", onKill, { once: true });
+
+	child.once("close", () => {
+		ctx.signal.removeEventListener("abort", onTerm);
+		ctx.forceSignal.removeEventListener("abort", onKill);
+	});
 
 	return child;
 }
@@ -423,46 +581,4 @@ async function defaultCreateDraftPr(
 
 async function defaultMarkPrReady(cwd: string, url: string): Promise<void> {
 	await runProc({ cmd: "gh", args: ["pr", "ready", url], cwd });
-}
-
-type ProcResult = {
-	readonly stdout: string;
-	readonly stderr: string;
-};
-
-function runProc(opts: {
-	cmd: string;
-	args: readonly string[];
-	cwd?: string;
-}): Promise<ProcResult> {
-	return new Promise((resolve, reject) => {
-		const child = spawn(opts.cmd, opts.args as string[], {
-			cwd: opts.cwd,
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-
-		let stdout = "";
-		let stderr = "";
-		child.stdout?.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString("utf8");
-		});
-		child.stderr?.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString("utf8");
-		});
-
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code === 0) {
-				resolve({ stdout, stderr });
-			} else {
-				const trimmed = stderr.trim();
-				const detail = trimmed.length > 0 ? `: ${trimmed}` : "";
-				reject(
-					new Error(
-						`${opts.cmd} ${opts.args.join(" ")} exited with code ${code}${detail}`,
-					),
-				);
-			}
-		});
-	});
 }

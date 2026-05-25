@@ -3,7 +3,12 @@ import type { IterationOutcome, IterationResult } from "./iteration.js";
 import { runInvocation } from "./loop.js";
 
 function fakeIteration(outcome: IterationOutcome): IterationResult {
-	return { outcome, exitCode: outcome === "complete" ? 0 : 1 };
+	// Mirror the iteration-runner contract: signal-killed children have
+	// no exit code (null), completed runs are exit-0, everything else
+	// gets a non-zero stand-in.
+	const exitCode =
+		outcome === "complete" ? 0 : outcome === "signal-killed" ? null : 1;
+	return { outcome, exitCode };
 }
 
 describe("runInvocation", () => {
@@ -71,6 +76,33 @@ describe("runInvocation", () => {
 		expect(runOne).toHaveBeenCalledTimes(3);
 		expect(summary.outcome).toBe("stalled");
 		expect(summary.stallReason).toBe("crash-rate");
+	});
+
+	it("breaks the loop and surfaces 'interrupted' when an iteration is killed by signal", async () => {
+		// Regression guard: SIGINT must NOT cause the loop to spawn
+		// another agent. Without the early-out, "signal-killed" falls
+		// through and iteration 2 runs even though the user asked to stop.
+		const results: IterationResult[] = [
+			fakeIteration("continue"),
+			fakeIteration("signal-killed"),
+			fakeIteration("complete"),
+		];
+		const runOne = vi
+			.fn<() => Promise<IterationResult>>()
+			.mockImplementation(async () => {
+				const next = results.shift();
+				if (next === undefined) throw new Error("too many iterations");
+				return next;
+			});
+
+		const summary = await runInvocation({
+			maxIter: 10,
+			runIteration: runOne,
+		});
+
+		expect(runOne).toHaveBeenCalledTimes(2);
+		expect(summary.outcome).toBe("interrupted");
+		expect(summary.iterations).toBe(2);
 	});
 
 	it("does not abort early when a single iteration crashes", async () => {

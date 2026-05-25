@@ -1,9 +1,13 @@
 import type { IterationResult } from "./iteration.js";
 
-export type InvocationOutcome = "complete" | "stalled";
+export type InvocationOutcome = "complete" | "stalled" | "interrupted";
 
 export interface InvocationSummary {
-	/** "complete" if the signal fired; "stalled" otherwise (max-iter / crash). */
+	/**
+	 * "complete" if the signal fired; "interrupted" if an iteration
+	 * was killed by an external signal (Ctrl-C); "stalled" otherwise
+	 * (max-iter / crash-rate).
+	 */
 	readonly outcome: InvocationOutcome;
 	/** How many iterations actually ran. */
 	readonly iterations: number;
@@ -46,6 +50,12 @@ export async function runInvocation(
 		if (result.outcome === "crashed") crashes += 1;
 		if (result.outcome === "complete") {
 			return { outcome: "complete", iterations: i, crashes };
+		}
+		if (result.outcome === "signal-killed") {
+			// External abort (Ctrl-C). Break the loop instead of spawning
+			// another agent; let the caller print a partial summary and
+			// exit with the interrupt status.
+			return { outcome: "interrupted", iterations: i, crashes };
 		}
 		if (i >= CRASH_RATE_MIN_SAMPLE && crashes / i > CRASH_RATE_THRESHOLD) {
 			return {

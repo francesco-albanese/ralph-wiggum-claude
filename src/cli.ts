@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
-import { type RunOptions, runCommand } from "./run.js";
+import { cleanup, createDefaultPorts, formatCleanupReport } from "./cleanup.js";
+import { runProc } from "./proc.js";
+import { captureRepoRoot, type RunOptions, runCommand } from "./run.js";
 
 const DEFAULT_MAX_ITER = 10;
 const DEFAULT_TIMEOUT_MIN = 30;
@@ -90,15 +92,27 @@ program
 	.action(async (raw: RawCliOptions) => {
 		try {
 			const opts = parseRunOptions(raw);
-			const prUrl = await runCommand(opts);
-			if (prUrl.length === 0) {
+			const result = await runCommand(opts);
+
+			if (result.outcome === "interrupted") {
+				console.error(
+					`ralph: interrupted after ${result.iterations} iteration(s)` +
+						(result.crashes > 0 ? `, ${result.crashes} crash(es)` : "") +
+						(result.prUrl.length > 0
+							? `; draft PR left at ${result.prUrl}`
+							: ""),
+				);
+				process.exit(130);
+			}
+
+			if (result.prUrl.length === 0) {
 				// Agent completed with no commits — a legitimate no-op
 				// success, distinct from a failure. Print to stderr so
 				// scripts capturing stdout for the PR URL get an empty
 				// value rather than a non-URL surprise.
 				console.error("ralph: agent completed with no commits to ship");
 			} else {
-				console.log(prUrl);
+				console.log(result.prUrl);
 			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
@@ -106,6 +120,73 @@ program
 			process.exit(1);
 		}
 	});
+
+export type RawCleanupOptions = {
+	readonly base?: string;
+	readonly branch?: string;
+	readonly apply?: boolean;
+	readonly force?: boolean;
+};
+
+program
+	.command("cleanup")
+	.description(
+		"List (or delete) local branches whose commits are already on origin",
+	)
+	.option(
+		"--base <name>",
+		"Remote base to compare against (origin/<base>). Defaults to the current branch.",
+	)
+	.option(
+		"--branch <name>",
+		"Target a single local branch instead of scanning all locals",
+	)
+	.option(
+		"--apply",
+		"Actually delete eligible branches (default: dry-run)",
+		false,
+	)
+	.option("--force", "Allow deletion of branches with unpushed commits", false)
+	.action(async (raw: RawCleanupOptions) => {
+		try {
+			const repoRoot = await captureRepoRoot();
+			const ports = createDefaultPorts({ repoRoot });
+			// Resolve the default base from the cwd the user invoked from,
+			// NOT the main checkout — `repoRoot` is the main worktree path
+			// (`git worktree list --porcelain` always lists it first), so
+			// using it here would default to whatever branch the main
+			// checkout happens to be on, even when ralph was run from a
+			// linked worktree. `process.cwd()` mirrors normal `git`
+			// CLI behaviour: the active worktree decides.
+			const base = raw.base ?? (await captureCurrentBranch(process.cwd()));
+			const report = await cleanup(ports, {
+				base,
+				...(raw.branch !== undefined ? { branch: raw.branch } : {}),
+				apply: raw.apply === true,
+				force: raw.force === true,
+			});
+			console.log(formatCleanupReport(report));
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`ralph: ${msg}`);
+			process.exit(1);
+		}
+	});
+
+async function captureCurrentBranch(repoRoot: string): Promise<string> {
+	const { stdout } = await runProc({
+		cmd: "git",
+		args: ["branch", "--show-current"],
+		cwd: repoRoot,
+	});
+	const branch = stdout.trim();
+	if (branch.length === 0) {
+		throw new Error(
+			"could not determine current branch (detached HEAD?); pass --base <name>",
+		);
+	}
+	return branch;
+}
 
 // Only auto-parse argv when this file is the entry point. Importing
 // `cli.ts` (e.g. from tests) must not have side effects.
