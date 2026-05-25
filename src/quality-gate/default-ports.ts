@@ -25,7 +25,7 @@ export function createDefaultQualityGatePorts(
 		captureDiff: async (input) => {
 			const { stdout } = await runProc({
 				cmd: "git",
-				args: ["diff", `${input.baseBranch}..HEAD`],
+				args: qualityGateDiffArgs(input.baseBranch),
 				cwd,
 			});
 			return stdout;
@@ -34,7 +34,7 @@ export function createDefaultQualityGatePorts(
 		listTouchedBeads: async (input) => {
 			const { stdout } = await runProc({
 				cmd: "git",
-				args: ["log", `${input.baseBranch}..HEAD`, "--format=%B"],
+				args: qualityGateLogArgs(input.baseBranch),
 				cwd,
 			});
 			const seen = new Set<string>();
@@ -126,6 +126,14 @@ export function createDefaultQualityGatePorts(
 			});
 		},
 	};
+}
+
+export function qualityGateDiffArgs(baseBranch: string): string[] {
+	return ["diff", `${baseBranch}...HEAD`];
+}
+
+export function qualityGateLogArgs(baseBranch: string): string[] {
+	return ["log", `${baseBranch}...HEAD`, "--right-only", "--format=%B"];
 }
 
 async function readActiveEpicNotes(

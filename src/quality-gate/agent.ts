@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 import type { AgentProvider } from "../providers.js";
 import { streamAgentText } from "../stream.js";
 
@@ -12,8 +13,9 @@ export type QualityGateAgentCommand = {
 
 export function buildQualityGateAgentCommand(
 	provider: AgentProvider,
+	prompt: string,
 ): QualityGateAgentCommand {
-	const command = provider.buildPrintCommand();
+	const command = provider.buildPrintCommand({ prompt });
 	return { cmd: command.cmd, args: command.args };
 }
 
@@ -21,14 +23,21 @@ export function spawnQualityGateAgent(args: {
 	readonly cwd: string;
 	readonly prompt: string;
 	readonly provider: AgentProvider;
+	readonly spawnImpl?: typeof spawn;
+	readonly timeoutMs?: number;
+	readonly hardKillGraceMs?: number;
+	readonly out?: Writable;
 }): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const command = buildQualityGateAgentCommand(args.provider);
-		const child = spawn(command.cmd, [...command.args], {
+		const command = buildQualityGateAgentCommand(args.provider, args.prompt);
+		const spawnImpl = args.spawnImpl ?? spawn;
+		const timeoutMs = args.timeoutMs ?? QG_AGENT_TIMEOUT_MS;
+		const hardKillGraceMs = args.hardKillGraceMs ?? QG_HARD_KILL_GRACE_MS;
+		const out = args.out ?? process.stdout;
+		const child = spawnImpl(command.cmd, [...command.args], {
 			cwd: args.cwd,
-			stdio: ["pipe", "pipe", "inherit"],
-		});
-		child.stdin?.end(args.prompt);
+			stdio: ["ignore", "pipe", "inherit"],
+		}) as ChildProcess;
 
 		const stdout = child.stdout;
 		if (stdout === null) {
@@ -64,8 +73,8 @@ export function spawnQualityGateAgent(args: {
 			child.kill("SIGTERM");
 			hardKillTimer = setTimeout(() => {
 				child.kill("SIGKILL");
-			}, QG_HARD_KILL_GRACE_MS);
-		}, QG_AGENT_TIMEOUT_MS);
+			}, hardKillGraceMs);
+		}, timeoutMs);
 
 		const sink: NodeJS.WritableStream = {
 			write(chunk: string | Uint8Array): boolean {
@@ -74,7 +83,7 @@ export function spawnQualityGateAgent(args: {
 						? chunk
 						: Buffer.from(chunk).toString("utf8");
 				collected += text;
-				process.stdout.write(text);
+				out.write(text);
 				return true;
 			},
 			end(): void {
@@ -92,7 +101,7 @@ export function spawnQualityGateAgent(args: {
 						safeReject(
 							new Error(
 								`quality gate agent timed out after ${Math.round(
-									QG_AGENT_TIMEOUT_MS / 60_000,
+									timeoutMs / 60_000,
 								)} minutes`,
 							),
 						);
