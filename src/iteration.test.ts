@@ -99,50 +99,56 @@ describe("runIteration", () => {
 
 	it("SIGTERMs the agent and resolves 'timed-out' after the per-iteration timeout", async () => {
 		vi.useFakeTimers();
-		const child = makeFakeChild();
-		const result = runIteration({
-			spawn: () => asChild(child),
-			out: new PassThrough(),
-			timeoutMs: 60,
-		});
+		try {
+			const child = makeFakeChild();
+			const result = runIteration({
+				spawn: () => asChild(child),
+				out: new PassThrough(),
+				timeoutMs: 60,
+			});
 
-		vi.advanceTimersByTime(61);
-		// The implementation must have asked the child to die.
-		expect(child.wasKilled()).toBe(true);
-		expect(child.killSignals()).toContain("SIGTERM");
-		// Simulate the SIGTERM propagating: process exits with non-zero.
-		child.finish(143, "SIGTERM");
+			vi.advanceTimersByTime(61);
+			// The implementation must have asked the child to die.
+			expect(child.wasKilled()).toBe(true);
+			expect(child.killSignals()).toContain("SIGTERM");
+			// Simulate the SIGTERM propagating: process exits with non-zero.
+			child.finish(143, "SIGTERM");
 
-		await expect(result).resolves.toMatchObject({ outcome: "timed-out" });
-		vi.useRealTimers();
+			await expect(result).resolves.toMatchObject({ outcome: "timed-out" });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("escalates to SIGKILL when the child ignores SIGTERM, and still resolves 'timed-out'", async () => {
 		vi.useFakeTimers();
-		const child = makeFakeChild({ ignoreKill: true });
-		const result = runIteration({
-			spawn: () => asChild(child),
-			out: new PassThrough(),
-			timeoutMs: 60,
-			hardKillGraceMs: 100,
-		});
+		try {
+			const child = makeFakeChild({ ignoreKill: true });
+			const result = runIteration({
+				spawn: () => asChild(child),
+				out: new PassThrough(),
+				timeoutMs: 60,
+				hardKillGraceMs: 100,
+			});
 
-		vi.advanceTimersByTime(61);
-		expect(child.killSignals()).toEqual(["SIGTERM"]);
+			vi.advanceTimersByTime(61);
+			expect(child.killSignals()).toEqual(["SIGTERM"]);
 
-		// SIGTERM is swallowed. After the hard-kill grace, SIGKILL fires.
-		vi.advanceTimersByTime(101);
-		expect(child.killSignals()).toEqual(["SIGTERM", "SIGKILL"]);
+			// SIGTERM is swallowed. After the hard-kill grace, SIGKILL fires.
+			vi.advanceTimersByTime(101);
+			expect(child.killSignals()).toEqual(["SIGTERM", "SIGKILL"]);
 
-		// Child STILL refuses to close (truly unkillable: D-state / zombie).
-		// After the safety grace, runIteration resolves anyway so the loop
-		// is not pinned forever on a hung child.
-		vi.advanceTimersByTime(101);
-		await expect(result).resolves.toMatchObject({
-			outcome: "timed-out",
-			exitCode: null,
-		});
-		vi.useRealTimers();
+			// Child STILL refuses to close (truly unkillable: D-state / zombie).
+			// After the safety grace, runIteration resolves anyway so the loop
+			// is not pinned forever on a hung child.
+			vi.advanceTimersByTime(101);
+			await expect(result).resolves.toMatchObject({
+				outcome: "timed-out",
+				exitCode: null,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("returns outcome 'signal-killed' when an external signal terminates the child without a timeout firing", async () => {
