@@ -3,9 +3,9 @@ import { describe, expect, it } from "vitest";
 import type { CostBreakdown } from "./cost.js";
 import {
 	type FinalSummary,
-	type IterationSummary,
 	fmtTokens,
 	fmtUsd,
+	type IterationSummary,
 	renderFinalSummary,
 	renderIterationSummary,
 } from "./summary.js";
@@ -17,10 +17,9 @@ function capture(fn: (out: PassThrough) => void): string {
 	fn(stream);
 	stream.end();
 	// Strip ANSI escapes so the snapshot is readable and stable.
-	return buf
-		.join("")
-		.replace(/\x1b\[[0-9;]*m/g, "")
-		.trimEnd();
+	// Pattern built from a string to avoid the control-char-in-regex lint.
+	const ansiRe = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+	return buf.join("").replace(ansiRe, "").trimEnd();
 }
 
 const breakdown = (totalUsd: number): CostBreakdown => ({

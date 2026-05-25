@@ -1,6 +1,14 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 import { parseBranch } from "./branch.js";
-import { type IterationResult, runIteration } from "./iteration.js";
+import { addUsage, CostCalculator, EMPTY_USAGE } from "./cost.js";
+import { StreamDisplay } from "./display.js";
+import {
+	type IterationResult,
+	type IterationStreamSummary,
+	runIteration,
+} from "./iteration.js";
+import { openLog } from "./log.js";
 import { runInvocation } from "./loop.js";
 import { runProc } from "./proc.js";
 import { type Worktree, WorktreeManager } from "./worktree.js";
@@ -42,6 +50,16 @@ export interface Orchestrator {
 export interface OrchestrationOptions {
 	readonly branch: string;
 	readonly maxIter: number;
+	/**
+	 * Per-iteration boundary hook forwarded to `runInvocation`. The
+	 * `StreamDisplay` uses this in production to render the iteration
+	 * summary box between iterations. Optional so unit tests of
+	 * orchestration logic stay terse.
+	 */
+	readonly onIterationEnd?: (
+		iteration: number,
+		result: IterationResult,
+	) => void | Promise<void>;
 }
 
 export interface OrchestrationResult {
@@ -118,6 +136,9 @@ export async function orchestrate(
 			}
 			return result;
 		},
+		...(opts.onIterationEnd !== undefined
+			? { onIterationEnd: opts.onIterationEnd }
+			: {}),
 	});
 
 	if (prUrl === undefined) {
@@ -207,6 +228,28 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 
 	const repoRoot = await captureRepoRoot();
 
+	// One log + one cost calculator + one StreamDisplay per invocation.
+	// Lifetime spans the whole loop so cumulative totals are correct
+	// and the log captures every iteration.
+	const structuredLog = openLog(repoRoot);
+	const cost = new CostCalculator();
+	const display = new StreamDisplay({ cost, log: structuredLog });
+	let totalUsage = EMPTY_USAGE;
+	// Per-iteration accumulator stash, owned by THIS invocation only
+	// (the `Map` is scoped to `runCommand` to avoid cross-invocation
+	// leakage when ralph is hosted in a long-lived process).
+	const perIterationAcc: Map<
+		number,
+		Awaited<ReturnType<StreamDisplay["consume"]>>
+	> = new Map();
+	structuredLog.write({
+		event: "invocation_start",
+		ts: new Date().toISOString(),
+		pid: process.pid,
+		branch: opts.branch,
+		maxIter,
+	});
+
 	const shutdown = installGracefulShutdown();
 	try {
 		await runInWorktree({
@@ -236,25 +279,79 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 					pushBranch: (branch) => defaultPushBranch(cwd, branch),
 					createDraftPr: (args) => defaultCreateDraftPr(cwd, args),
 					markPrReady: (url) => defaultMarkPrReady(cwd, url),
-					runIteration: () =>
-						runIteration({
+					runIteration: (iteration) => {
+						structuredLog.write({
+							event: "iteration_start",
+							ts: new Date().toISOString(),
+							iteration,
+						});
+						// Keep a handle to the accumulator so the
+						// `onIterationEnd` hook can render the summary
+						// box with this iteration's actual numbers,
+						// not the cumulative cost.
+						let pendingAcc: Awaited<
+							ReturnType<StreamDisplay["consume"]>
+						> | null = null;
+						const consume = async (
+							stdout: Readable,
+						): Promise<IterationStreamSummary> => {
+							const acc = await display.consume(stdout, iteration);
+							pendingAcc = acc;
+							return acc.model !== undefined
+								? {
+										usage: acc.usage,
+										taskClosed: acc.taskClosed,
+										model: acc.model,
+									}
+								: { usage: acc.usage, taskClosed: acc.taskClosed };
+						};
+						return runIteration({
 							spawn: () => spawnAgent({ cwd, signal, forceSignal }),
 							out: process.stdout,
 							timeoutMs,
+							consume,
 							...(opts.completeSignal !== undefined
 								? { completeSignal: opts.completeSignal }
 								: {}),
-						}),
+						}).then((result) => {
+							// Stash the accumulator on the result via closure for
+							// `onIterationEnd`. We can't smuggle it through
+							// `IterationResult` without leaking display types into
+							// `iteration.ts`, so we use a per-iteration `Map`.
+							if (pendingAcc !== null) {
+								perIterationAcc.set(iteration, pendingAcc);
+							}
+							return result;
+						});
+					},
 				};
 
 				orchResult = await orchestrate(orch, {
 					branch: opts.branch,
 					maxIter,
+					onIterationEnd: (iteration, result) => {
+						const acc = perIterationAcc.get(iteration);
+						if (acc === undefined) return;
+						totalUsage = addUsage(totalUsage, result.usage);
+						display.renderIterationSummary({
+							iteration,
+							maxIter,
+							acc,
+						});
+					},
 				});
 			},
 		});
 	} finally {
 		shutdown.dispose();
+		const outcome = orchResult?.outcome ?? "interrupted";
+		display.renderFinalSummary({
+			iterations: orchResult?.iterations ?? 0,
+			maxIter,
+			outcome,
+			totalUsage,
+		});
+		await structuredLog.close();
 	}
 
 	if (orchResult === undefined) {

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-	CostCalculator,
-	type PricingTable,
 	addUsage,
+	CostCalculator,
 	loadBundledPricing,
+	type PricingTable,
 } from "./cost.js";
 import type { IterationUsage } from "./stream.js";
 

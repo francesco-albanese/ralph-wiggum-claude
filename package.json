@@ -11,7 +11,8 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && pnpm run build:assets",
+    "build:assets": "node -e \"import('node:fs/promises').then(async ({mkdir,copyFile}) => { await mkdir('dist/pricing',{recursive:true}); await copyFile('src/pricing/pricing.json','dist/pricing/pricing.json'); })\"",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

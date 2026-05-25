@@ -1,23 +1,23 @@
 import type { Readable, Writable } from "node:stream";
 import { log } from "@clack/prompts";
 import {
+	addUsage,
 	type CostBreakdown,
 	type CostCalculator,
 	EMPTY_USAGE,
-	addUsage,
 } from "./cost.js";
 import type { StructuredLog } from "./log.js";
+import {
+	type IterationUsage,
+	type ParsedStreamEvent,
+	streamAgentEvents,
+} from "./stream.js";
 import {
 	type FinalSummary,
 	type IterationSummary,
 	renderFinalSummary,
 	renderIterationSummary,
 } from "./summary.js";
-import {
-	type IterationUsage,
-	type ParsedStreamEvent,
-	streamAgentEvents,
-} from "./stream.js";
 
 /**
  * Per-iteration aggregation built up by `StreamDisplay` as
