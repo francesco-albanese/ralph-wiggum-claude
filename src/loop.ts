@@ -22,6 +22,21 @@ export interface RunInvocationOptions {
 	readonly maxIter: number;
 	/** Inject the per-iteration runner — keeps the loop pure for tests. */
 	readonly runIteration: (iteration: number) => Promise<IterationResult>;
+	/**
+	 * Per-iteration boundary hook. Fires immediately after each
+	 * iteration resolves — BEFORE the loop decides to continue,
+	 * stop, or escalate to crash-rate stall. `StreamDisplay` uses
+	 * this to render the iteration-summary box between iterations
+	 * and to log the iteration-end event.
+	 *
+	 * Errors thrown here propagate out of `runInvocation` — the loop
+	 * intentionally does not swallow them, otherwise a buggy renderer
+	 * could silently corrupt the structured log.
+	 */
+	readonly onIterationEnd?: (
+		iteration: number,
+		result: IterationResult,
+	) => void | Promise<void>;
 }
 
 /**
@@ -47,6 +62,9 @@ export async function runInvocation(
 	let crashes = 0;
 	for (let i = 1; i <= opts.maxIter; i += 1) {
 		const result = await opts.runIteration(i);
+		if (opts.onIterationEnd !== undefined) {
+			await opts.onIterationEnd(i, result);
+		}
 		if (result.outcome === "crashed") crashes += 1;
 		if (result.outcome === "complete") {
 			return { outcome: "complete", iterations: i, crashes };

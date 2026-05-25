@@ -8,7 +8,16 @@ function fakeIteration(outcome: IterationOutcome): IterationResult {
 	// gets a non-zero stand-in.
 	const exitCode =
 		outcome === "complete" ? 0 : outcome === "signal-killed" ? null : 1;
-	return { outcome, exitCode };
+	return {
+		outcome,
+		exitCode,
+		usage: {
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheCreateTokens: 0,
+			cacheReadTokens: 0,
+		},
+	};
 }
 
 describe("runInvocation", () => {

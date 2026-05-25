@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { createCompletionDetector } from "./completion.js";
-import { streamAgentText } from "./stream.js";
+import { type IterationUsage, streamAgentText } from "./stream.js";
 
 export type IterationOutcome =
 	| "complete"
@@ -9,10 +10,30 @@ export type IterationOutcome =
 	| "timed-out"
 	| "signal-killed";
 
+/**
+ * Output of an injected stream `consumer` (e.g. `StreamDisplay`).
+ * `taskClosed` mirrors the completion-detector signal so a consumer
+ * that drains its own copy of the stream can authoritatively report
+ * it without `iteration.ts` re-running the detector on the same bytes.
+ */
+export type IterationStreamSummary = {
+	readonly usage: IterationUsage;
+	readonly taskClosed: boolean;
+	readonly model?: string;
+};
+
 export interface IterationResult {
 	readonly outcome: IterationOutcome;
 	/** Exit code if the agent exited (null if killed by signal). */
 	readonly exitCode: number | null;
+	/**
+	 * Token usage observed during the iteration. Always present
+	 * (zero counts when the agent produced no usage events), so
+	 * downstream summary / cost code never has to null-check.
+	 */
+	readonly usage: IterationUsage;
+	/** Model the agent reported, if any. */
+	readonly model?: string;
 }
 
 export interface RunIterationOptions {
@@ -39,6 +60,14 @@ export interface RunIterationOptions {
 	 * (zombie/D-state) child cannot hang the loop indefinitely.
 	 */
 	readonly hardKillGraceMs?: number;
+	/**
+	 * Optional richer stream consumer (e.g. `StreamDisplay.consume`).
+	 * When supplied, it owns reading from the child's stdout AND is
+	 * trusted for `taskClosed` and `usage` — the default text-only
+	 * path with the completion detector is skipped to avoid two
+	 * readers on the same stream.
+	 */
+	readonly consume?: (stdout: Readable) => Promise<IterationStreamSummary>;
 }
 
 const DEFAULT_HARD_KILL_GRACE_MS = 5_000;
@@ -64,6 +93,8 @@ export function runIteration(
 		);
 
 		// Tee the agent's text stream: forward to `out`, also feed the detector.
+		// Only used in the default (no-consumer) path — a richer consumer
+		// is trusted to report `taskClosed` itself.
 		const sink: NodeJS.WritableStream = {
 			write(chunk: string | Uint8Array): boolean {
 				const text =
@@ -80,7 +111,13 @@ export function runIteration(
 			// Minimal stub: only the two methods streamAgentText uses.
 		} as unknown as NodeJS.WritableStream;
 
-		const streaming = streamAgentText(stdout, sink);
+		let consumerSummary: IterationStreamSummary | undefined;
+		const streaming =
+			opts.consume !== undefined
+				? opts.consume(stdout).then((s) => {
+						consumerSummary = s;
+					})
+				: streamAgentText(stdout, sink);
 
 		const hardKillGraceMs = opts.hardKillGraceMs ?? DEFAULT_HARD_KILL_GRACE_MS;
 
@@ -108,6 +145,24 @@ export function runIteration(
 			reject(err);
 		};
 
+		const buildResult = (
+			outcome: IterationOutcome,
+			code: number | null,
+		): IterationResult => {
+			const usage = consumerSummary?.usage ?? ZERO_USAGE;
+			const model = consumerSummary?.model;
+			return model !== undefined
+				? { outcome, exitCode: code, usage, model }
+				: { outcome, exitCode: code, usage };
+		};
+
+		const isComplete = (): boolean => {
+			if (opts.consume !== undefined) {
+				return consumerSummary?.taskClosed === true;
+			}
+			return detector.matched;
+		};
+
 		if (opts.timeoutMs !== undefined) {
 			timer = setTimeout(() => {
 				timedOut = true;
@@ -118,7 +173,7 @@ export function runIteration(
 					// unkillable — kernel zombie, D-state), resolve anyway
 					// after another grace window so the loop can advance.
 					safetyTimer = setTimeout(() => {
-						safeResolve({ outcome: "timed-out", exitCode: null });
+						safeResolve(buildResult("timed-out", null));
 					}, hardKillGraceMs);
 				}, hardKillGraceMs);
 			}, opts.timeoutMs);
@@ -131,20 +186,27 @@ export function runIteration(
 			streaming
 				.then(() => {
 					if (timedOut) {
-						safeResolve({ outcome: "timed-out", exitCode: code });
-					} else if (detector.matched) {
-						safeResolve({ outcome: "complete", exitCode: code });
+						safeResolve(buildResult("timed-out", code));
+					} else if (isComplete()) {
+						safeResolve(buildResult("complete", code));
 					} else if (code === 0) {
-						safeResolve({ outcome: "continue", exitCode: code });
+						safeResolve(buildResult("continue", code));
 					} else if (signal !== null) {
 						// Externally killed by signal (e.g. parent abort)
 						// without our timeout firing: don't count as crashed.
-						safeResolve({ outcome: "signal-killed", exitCode: code });
+						safeResolve(buildResult("signal-killed", code));
 					} else {
-						safeResolve({ outcome: "crashed", exitCode: code });
+						safeResolve(buildResult("crashed", code));
 					}
 				})
 				.catch(safeReject);
 		});
 	});
 }
+
+const ZERO_USAGE: IterationUsage = {
+	inputTokens: 0,
+	outputTokens: 0,
+	cacheCreateTokens: 0,
+	cacheReadTokens: 0,
+};
