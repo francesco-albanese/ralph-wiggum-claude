@@ -99,6 +99,24 @@ describe("WorktreeManager", () => {
 		}
 	});
 
+	it("rejects re-creating after remove() because the branch is retained", async () => {
+		// remove() intentionally preserves the branch ref (it holds the
+		// agent's commits). A subsequent create() with the same branch
+		// name MUST fail loudly rather than silently overwrite the ref,
+		// which is the user-actionable signal that work from a prior run
+		// still needs to be pushed or explicitly discarded.
+		const branch = parseBranch("feat/reuse");
+		const mgr = new WorktreeManager({ repoRoot: repo });
+
+		const wt = await mgr.create(branch);
+		await mgr.remove(wt);
+		expect(git(repo, ["branch", "--list", "feat/reuse"]).trim()).toBe(
+			"feat/reuse",
+		);
+
+		await expect(mgr.create(branch)).rejects.toThrow();
+	});
+
 	it("cleans up worktree even if caller throws between create and remove", async () => {
 		const branch = parseBranch("feat/crash");
 		const mgr = new WorktreeManager({ repoRoot: repo });
