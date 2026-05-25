@@ -1,9 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type AgentRunner, runInWorktree } from "../src/run.js";
+import {
+	type AgentRunner,
+	captureRepoRoot,
+	runInWorktree,
+} from "../src/run.js";
 
 function git(cwd: string, args: readonly string[]): string {
 	return execFileSync("git", args as string[], {
@@ -60,9 +70,9 @@ describe("runInWorktree", () => {
 
 		const expected = join(repo, ".ralph", "worktrees", "feat%2Fx");
 		expect(observedCwd).toBe(expected);
-		// cleanup
+		// worktree dir removed, branch reference preserved
 		expect(existsSync(expected)).toBe(false);
-		expect(git(repo, ["branch", "--list", "feat/x"]).trim()).toBe("");
+		expect(git(repo, ["branch", "--list", "feat/x"]).trim()).toBe("feat/x");
 	});
 
 	it("removes the worktree when the agent throws (crash path)", async () => {
@@ -76,7 +86,10 @@ describe("runInWorktree", () => {
 
 		const path = join(repo, ".ralph", "worktrees", "feat%2Fcrash");
 		expect(existsSync(path)).toBe(false);
-		expect(git(repo, ["branch", "--list", "feat/crash"]).trim()).toBe("");
+		// Crash path must NOT destroy the branch — agent commits live there.
+		expect(git(repo, ["branch", "--list", "feat/crash"]).trim()).toBe(
+			"feat/crash",
+		);
 	});
 
 	it("removes the worktree when the agent is aborted via the supplied signal (Ctrl-C path)", async () => {
@@ -113,6 +126,41 @@ describe("runInWorktree", () => {
 
 		const path = join(repo, ".ralph", "worktrees", "feat%2Fctrl-c");
 		expect(existsSync(path)).toBe(false);
-		expect(git(repo, ["branch", "--list", "feat/ctrl-c"]).trim()).toBe("");
+		// Ctrl-C path must NOT destroy the branch — same reason as crash.
+		expect(git(repo, ["branch", "--list", "feat/ctrl-c"]).trim()).toBe(
+			"feat/ctrl-c",
+		);
+	});
+});
+
+describe("captureRepoRoot", () => {
+	let repo: string;
+	let originalCwd: string;
+
+	beforeEach(() => {
+		repo = makeRepo();
+		originalCwd = process.cwd();
+	});
+
+	afterEach(() => {
+		process.chdir(originalCwd);
+		rmSync(repo, { recursive: true, force: true });
+	});
+
+	it("returns the main checkout path even when invoked from inside a linked worktree", async () => {
+		// Regression guard: `git rev-parse --show-toplevel` would return
+		// the linked worktree's path here, causing nested ralph runs to
+		// stack `.ralph/worktrees/` directories. `captureRepoRoot` must
+		// resolve to the MAIN checkout no matter the cwd.
+		const linkedPath = join(repo, ".ralph", "worktrees", "feat%2Fnested");
+		git(repo, ["worktree", "add", "-b", "feat/nested", linkedPath]);
+
+		// Some platforms (macOS) place tmpdir under /private; resolve
+		// symlinks so the assertion compares canonical paths.
+		const expected = realpathSync(repo);
+		process.chdir(linkedPath);
+
+		const root = await captureRepoRoot();
+		expect(realpathSync(root)).toBe(expected);
 	});
 });

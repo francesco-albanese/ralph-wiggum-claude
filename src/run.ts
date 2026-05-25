@@ -178,11 +178,13 @@ export async function runCommand(opts: RunOptions): Promise<string> {
 
 	let prUrl = "";
 
+	const repoRoot = await captureRepoRoot();
+
 	const signalCtl = installSignalAbort();
 	try {
 		await runInWorktree({
 			branch: opts.branch,
-			repoRoot: process.cwd(),
+			repoRoot,
 			signal: signalCtl.signal,
 			agent: async ({ cwd, signal }) => {
 				const orch: Orchestrator = {
@@ -320,6 +322,29 @@ async function hostCaptureBaseBranch(): Promise<string> {
 		throw new Error("could not determine current branch (detached HEAD?)");
 	}
 	return base;
+}
+
+// Resolve the MAIN checkout's path so `.ralph/worktrees/` lands at the
+// top of the user's repo, regardless of which subdirectory ralph was
+// invoked from AND regardless of whether the cwd is itself a linked
+// worktree (e.g., a nested ralph invocation inside .ralph/worktrees/<x>/).
+// `git rev-parse --show-toplevel` would return the linked worktree's
+// path and cause nesting; `git worktree list --porcelain` always lists
+// the main worktree first.
+export async function captureRepoRoot(): Promise<string> {
+	const { stdout } = await runProc({
+		cmd: "git",
+		args: ["worktree", "list", "--porcelain"],
+	});
+	const firstLine = stdout.split(/\r?\n/, 1)[0] ?? "";
+	const match = firstLine.match(/^worktree (.+)$/);
+	const root = match?.[1];
+	if (root === undefined) {
+		throw new Error(
+			"could not resolve git repo root from `git worktree list`; is the current directory inside a git repo?",
+		);
+	}
+	return root;
 }
 
 /**

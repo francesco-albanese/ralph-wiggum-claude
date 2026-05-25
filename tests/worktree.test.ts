@@ -67,7 +67,7 @@ describe("WorktreeManager", () => {
 		}
 	});
 
-	it("removes the worktree directory and prunes the branch on remove()", async () => {
+	it("removes the worktree directory but preserves the branch reference", async () => {
 		const branch = parseBranch("feat/cleanup");
 		const mgr = new WorktreeManager({ repoRoot: repo });
 
@@ -78,8 +78,10 @@ describe("WorktreeManager", () => {
 
 		expect(existsSync(wt.path)).toBe(false);
 
+		// Branch ref is intentionally retained — it holds the agent's
+		// commits, which may not yet be safe on the remote.
 		const branches = git(repo, ["branch", "--list", "feat/cleanup"]).trim();
-		expect(branches).toBe("");
+		expect(branches).toBe("feat/cleanup");
 
 		const list = git(repo, ["worktree", "list", "--porcelain"]);
 		expect(list).not.toContain("feat%2Fcleanup");
@@ -97,6 +99,24 @@ describe("WorktreeManager", () => {
 		}
 	});
 
+	it("rejects re-creating after remove() because the branch is retained", async () => {
+		// remove() intentionally preserves the branch ref (it holds the
+		// agent's commits). A subsequent create() with the same branch
+		// name MUST fail loudly rather than silently overwrite the ref,
+		// which is the user-actionable signal that work from a prior run
+		// still needs to be pushed or explicitly discarded.
+		const branch = parseBranch("feat/reuse");
+		const mgr = new WorktreeManager({ repoRoot: repo });
+
+		const wt = await mgr.create(branch);
+		await mgr.remove(wt);
+		expect(git(repo, ["branch", "--list", "feat/reuse"]).trim()).toBe(
+			"feat/reuse",
+		);
+
+		await expect(mgr.create(branch)).rejects.toThrow();
+	});
+
 	it("cleans up worktree even if caller throws between create and remove", async () => {
 		const branch = parseBranch("feat/crash");
 		const mgr = new WorktreeManager({ repoRoot: repo });
@@ -111,8 +131,10 @@ describe("WorktreeManager", () => {
 		}
 
 		expect(existsSync(wt.path)).toBe(false);
+		// Branch retained even on crash path: those commits might be the
+		// only copy of the agent's work.
 		const branches = git(repo, ["branch", "--list", "feat/crash"]).trim();
-		expect(branches).toBe("");
+		expect(branches).toBe("feat/crash");
 	});
 
 	it("remove() is idempotent — second call is a no-op", async () => {
