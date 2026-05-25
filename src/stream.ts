@@ -2,8 +2,53 @@ import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
 
 /**
- * Walking-skeleton stream-JSON parser for Claude Code's
- * `--output-format stream-json --verbose` output.
+ * Per-iteration token-usage counts, derived from each agent's
+ * stream-JSON. NEVER from a separate API call.
+ *
+ * Field names match provider token usage shapes, normalised to
+ * camelCase for our own surface.
+ */
+export type IterationUsage = {
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+	readonly cacheCreateTokens: number;
+	readonly cacheReadTokens: number;
+};
+
+/**
+ * Normalised event union emitted by `streamAgentEvents`. We surface
+ * only the parts of Claude Code's stream-JSON that downstream
+ * consumers (display, cost, log) actually care about — everything
+ * else (status pings, tool_result echoes) is dropped.
+ */
+export type ParsedStreamEvent =
+	| {
+			readonly kind: "init";
+			/** Model id reported by the agent (e.g. "claude-opus-4-7"). */
+			readonly model: string;
+	  }
+	| {
+			readonly kind: "text";
+			/** Streamed prose chunk from the assistant. */
+			readonly text: string;
+	  }
+	| {
+			readonly kind: "tool";
+			/** Tool name (e.g. "Bash", "Read", "Edit"). */
+			readonly name: string;
+			/** Raw tool input — shape varies per tool. */
+			readonly input: unknown;
+	  }
+	| {
+			readonly kind: "usage";
+			/** Token counts for this iteration so far (cumulative within the agent). */
+			readonly usage: IterationUsage;
+			/** Model the usage applies to, if the agent reported one. */
+			readonly model?: string;
+	  };
+
+/**
+ * Walking-skeleton stream-JSON parser for agent stream-JSON output.
  *
  * Claude emits one JSON object per line. We only care about
  * `assistant` events and within those only `text` content
@@ -11,11 +56,37 @@ import type { Readable } from "node:stream";
  * for this slice.
  *
  * Non-JSON lines (status noise) are swallowed.
+ *
+ * Retained alongside `streamAgentEvents` so existing call sites
+ * (e.g. `runIteration`) keep working without refactor.
  */
 export async function streamAgentText(
 	stdout: Readable,
 	out: NodeJS.WritableStream,
 ): Promise<void> {
+	for await (const event of streamAgentEvents(stdout)) {
+		if (event.kind === "text") {
+			out.write(event.text);
+		}
+	}
+}
+
+/**
+ * Async iterator over the normalised `ParsedStreamEvent`s extracted
+ * from Claude Code's stream-JSON. Consumers (display, cost calculator,
+ * structured log) subscribe by `for await`-ing this once per agent
+ * subprocess.
+ *
+ * Non-JSON lines and uninteresting event types are silently dropped.
+ * Token-usage events are surfaced only from terminal events:
+ * Claude Code's `result` or OpenAI Responses' `response.completed`.
+ * Those are the authoritative final usage for the iteration.
+ * Intermediate `assistant.message.usage` snapshots are intentionally
+ * ignored to avoid double-counting.
+ */
+export async function* streamAgentEvents(
+	stdout: Readable,
+): AsyncGenerator<ParsedStreamEvent, void, void> {
 	const rl = createInterface({
 		input: stdout,
 		crlfDelay: Number.POSITIVE_INFINITY,
@@ -32,31 +103,132 @@ export async function streamAgentText(
 			continue;
 		}
 
-		const text = extractAssistantText(event);
-		if (text.length > 0) {
-			out.write(text);
+		yield* parseEvent(event);
+	}
+}
+
+function* parseEvent(event: unknown): Generator<ParsedStreamEvent, void, void> {
+	if (!isRecord(event)) return;
+
+	const type = event.type;
+
+	if (type === "system" && event.subtype === "init") {
+		const model = typeof event.model === "string" ? event.model : undefined;
+		if (model !== undefined) yield { kind: "init", model };
+		return;
+	}
+
+	if (type === "assistant") {
+		const message = event.message;
+		if (!isRecord(message)) return;
+
+		const content = message.content;
+		if (Array.isArray(content)) {
+			for (const block of content) {
+				if (!isRecord(block)) continue;
+				if (block.type === "text" && typeof block.text === "string") {
+					yield { kind: "text", text: block.text };
+				} else if (block.type === "tool_use") {
+					const name = typeof block.name === "string" ? block.name : "tool";
+					yield { kind: "tool", name, input: block.input };
+				}
+			}
+		}
+
+		// NB: we intentionally DO NOT surface usage from `assistant`
+		// events. Claude Code emits per-message usage there which would
+		// double-count against the authoritative final `result.usage`
+		// event. Cost is computed from `result` only.
+		//
+		// Trade-off: if the agent crashes/times out before emitting
+		// `result`, the iteration's cost is reported as $0. We accept
+		// that — surfacing a partial assistant.usage snapshot as the
+		// "real" cost would be MORE misleading, and the structured
+		// log keeps every parsed event raw so a forensic reader can
+		// still recover the partial totals. See stream.test.ts for
+		// both the realistic-capture and inverse-fixture regression
+		// tests.
+		return;
+	}
+
+	if (type === "result") {
+		// Terminal event — Claude Code reports the authoritative
+		// final usage here. The ONLY usage source we trust so the
+		// per-iteration totals are correct end-to-end.
+		const usage = parseUsage(event.usage);
+		if (usage !== undefined) {
+			const model = typeof event.model === "string" ? event.model : undefined;
+			yield model !== undefined
+				? { kind: "usage", usage, model }
+				: { kind: "usage", usage };
+		}
+	}
+
+	if (type === "response.completed") {
+		const response = event.response;
+		if (!isRecord(response)) return;
+
+		const usage = parseOpenAiUsage(response.usage);
+		if (usage !== undefined) {
+			const model =
+				typeof response.model === "string" ? response.model : undefined;
+			yield model !== undefined
+				? { kind: "usage", usage, model }
+				: { kind: "usage", usage };
 		}
 	}
 }
 
-function extractAssistantText(event: unknown): string {
-	if (!isRecord(event)) return "";
-	if (event.type !== "assistant") return "";
+function parseUsage(raw: unknown): IterationUsage | undefined {
+	if (!isRecord(raw)) return undefined;
+	const inputTokens = tokenCountOr(raw.input_tokens, 0);
+	const outputTokens = tokenCountOr(raw.output_tokens, 0);
+	const cacheCreateTokens = tokenCountOr(raw.cache_creation_input_tokens, 0);
+	const cacheReadTokens = tokenCountOr(raw.cache_read_input_tokens, 0);
+	return nonZeroUsage({
+		inputTokens,
+		outputTokens,
+		cacheCreateTokens,
+		cacheReadTokens,
+	});
+}
 
-	const message = event.message;
-	if (!isRecord(message)) return "";
+function parseOpenAiUsage(raw: unknown): IterationUsage | undefined {
+	if (!isRecord(raw)) return undefined;
+	const totalInputTokens = tokenCountOr(raw.input_tokens, 0);
+	const inputDetails = isRecord(raw.input_tokens_details)
+		? raw.input_tokens_details
+		: undefined;
+	const cacheReadTokens = Math.min(
+		totalInputTokens,
+		tokenCountOr(inputDetails?.cached_tokens, 0),
+	);
+	const inputTokens = totalInputTokens - cacheReadTokens;
+	const outputTokens = tokenCountOr(raw.output_tokens, 0);
+	return nonZeroUsage({
+		inputTokens,
+		outputTokens,
+		cacheCreateTokens: 0,
+		cacheReadTokens,
+	});
+}
 
-	const content = message.content;
-	if (!Array.isArray(content)) return "";
-
-	let out = "";
-	for (const block of content) {
-		if (!isRecord(block)) continue;
-		if (block.type !== "text") continue;
-		const text = block.text;
-		if (typeof text === "string") out += text;
+function nonZeroUsage(usage: IterationUsage): IterationUsage | undefined {
+	if (
+		usage.inputTokens === 0 &&
+		usage.outputTokens === 0 &&
+		usage.cacheCreateTokens === 0 &&
+		usage.cacheReadTokens === 0
+	) {
+		// All zero — likely a placeholder; not useful to surface.
+		return undefined;
 	}
-	return out;
+	return usage;
+}
+
+function tokenCountOr(value: unknown, fallback: number): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+	return Math.max(0, Math.floor(value));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

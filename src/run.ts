@@ -1,6 +1,15 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 import { parseBranch } from "./branch.js";
-import { type IterationResult, runIteration } from "./iteration.js";
+import { addUsage, CostCalculator, EMPTY_USAGE } from "./cost.js";
+import { type IterationAccumulator, StreamDisplay } from "./display.js";
+import {
+	type IterationResult,
+	type IterationStreamSummary,
+	type RunIterationOptions,
+	runIteration,
+} from "./iteration.js";
+import { openLog, type StructuredLog } from "./log.js";
 import { runInvocation } from "./loop.js";
 import { runProc } from "./proc.js";
 import {
@@ -65,6 +74,16 @@ export interface Orchestrator {
 export interface OrchestrationOptions {
 	readonly branch: string;
 	readonly maxIter: number;
+	/**
+	 * Per-iteration boundary hook forwarded to `runInvocation`. The
+	 * `StreamDisplay` uses this in production to render the iteration
+	 * summary box between iterations. Optional so unit tests of
+	 * orchestration logic stay terse.
+	 */
+	readonly onIterationEnd?: (
+		iteration: number,
+		result: IterationResult,
+	) => void | Promise<void>;
 }
 
 export interface OrchestrationResult {
@@ -155,6 +174,9 @@ export async function orchestrate(
 			}
 			return result;
 		},
+		...(opts.onIterationEnd !== undefined
+			? { onIterationEnd: opts.onIterationEnd }
+			: {}),
 	});
 
 	if (prUrl === undefined) {
@@ -250,6 +272,124 @@ export type RunCommandResult = {
 	readonly qgError?: string;
 };
 
+/**
+ * Build the per-invocation display stack: structured JSON log,
+ * cost calculator, and `StreamDisplay`. Extracted from `runCommand`
+ * so the wiring is small and testable in isolation.
+ *
+ * The returned `log` is opened immediately — callers MUST drive it
+ * through a `try { ... } finally { log.close(); }` to avoid leaking
+ * the file descriptor on a thrown setup error.
+ */
+export type DisplayStack = {
+	readonly log: StructuredLog;
+	readonly cost: CostCalculator;
+	readonly display: StreamDisplay;
+};
+
+export function wireDisplay(args: {
+	readonly repoRoot: string;
+	readonly completeSignal?: RegExp;
+}): DisplayStack {
+	const log = openLog(args.repoRoot);
+	const cost = new CostCalculator();
+	const display = new StreamDisplay({
+		cost,
+		log,
+		// Forward --complete-signal so the "task closed" flag in the
+		// per-iteration summary respects the user's override.
+		...(args.completeSignal !== undefined
+			? { completeSignal: args.completeSignal }
+			: {}),
+	});
+	return { log, cost, display };
+}
+
+/**
+ * Wrap `runIteration` so the per-iteration boundary renders the
+ * iteration-summary box, accumulates totals, and logs start/end —
+ * all in ONE place. The display accumulator is the single source of
+ * truth: no shared `Map`, no closure smuggling between layers.
+ *
+ * `onIterationDone` is called after rendering so the caller can keep
+ * a running `totalUsage` for the final summary box.
+ */
+export function pricedRunIteration(args: {
+	readonly display: StreamDisplay;
+	readonly log: StructuredLog;
+	readonly cost: CostCalculator;
+	readonly maxIter: number;
+	readonly spawnRunIteration: (
+		consume: NonNullable<RunIterationOptions["consume"]>,
+		iteration: number,
+	) => Promise<IterationResult>;
+	readonly onIterationDone: (
+		iteration: number,
+		result: IterationResult,
+		acc: IterationAccumulator,
+	) => void;
+}): (iteration: number) => Promise<IterationResult> {
+	return async (iteration: number): Promise<IterationResult> => {
+		args.log.write({
+			event: "iteration_start",
+			ts: new Date().toISOString(),
+			iteration,
+		});
+
+		// Bind the per-iteration accumulator into the consume callback
+		// so the post-iteration render uses THIS iteration's numbers
+		// without any cross-iteration state.
+		let acc: IterationAccumulator | undefined;
+		const consume = async (
+			stdout: Readable,
+		): Promise<IterationStreamSummary> => {
+			acc = await args.display.consume(stdout, iteration);
+			return acc.model !== undefined
+				? { usage: acc.usage, taskClosed: acc.taskClosed, model: acc.model }
+				: { usage: acc.usage, taskClosed: acc.taskClosed };
+		};
+
+		const result = await args.spawnRunIteration(consume, iteration);
+		const endAcc =
+			acc ??
+			(result.model !== undefined
+				? {
+						usage: result.usage,
+						cost: args.cost.priceUsage(result.model, result.usage),
+						model: result.model,
+						taskClosed: result.outcome === "complete",
+					}
+				: {
+						usage: result.usage,
+						cost: zeroCost(),
+						taskClosed: result.outcome === "complete",
+					});
+
+		if (acc !== undefined) {
+			args.display.renderIterationSummary({
+				iteration,
+				maxIter: args.maxIter,
+				acc,
+				result,
+			});
+		} else {
+			args.display.recordIterationEnd({ iteration, result, acc: endAcc });
+		}
+		args.onIterationDone(iteration, result, endAcc);
+		return result;
+	};
+}
+
+function zeroCost() {
+	return {
+		inputUsd: 0,
+		outputUsd: 0,
+		cacheCreateUsd: 0,
+		cacheReadUsd: 0,
+		totalUsd: 0,
+	};
+}
+
 export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 	// Validate the branch up-front so a bad --branch fails before we
 	// touch git (matches the walking-skeleton/worktree-isolation contract).
@@ -268,14 +408,58 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 
 	const repoRoot = await captureRepoRoot();
 
-	const shutdown = installGracefulShutdown();
+	// `wireDisplay` opens the log file. Everything from here on must
+	// run inside a try/finally that closes it, otherwise a thrown
+	// `installGracefulShutdown` (or any later setup step) leaks the fd.
+	const {
+		log: structuredLog,
+		cost,
+		display,
+	} = wireDisplay({
+		repoRoot,
+		...(opts.completeSignal !== undefined
+			? { completeSignal: opts.completeSignal }
+			: {}),
+	});
+	let totalUsage = EMPTY_USAGE;
+	let shutdownDispose: (() => void) | null = null;
 	try {
+		structuredLog.write({
+			event: "invocation_start",
+			ts: new Date().toISOString(),
+			pid: process.pid,
+			branch: opts.branch,
+			maxIter,
+		});
+
+		const shutdown = installGracefulShutdown();
+		shutdownDispose = shutdown.dispose;
 		await runInWorktree({
 			branch: opts.branch,
 			repoRoot,
 			signal: shutdown.signal,
 			forceSignal: shutdown.forceSignal,
 			agent: async ({ cwd, signal, forceSignal }) => {
+				const wrappedRunIteration = pricedRunIteration({
+					display,
+					log: structuredLog,
+					cost,
+					maxIter,
+					spawnRunIteration: (consume) =>
+						runIteration({
+							spawn: () => spawnAgent({ cwd, signal, forceSignal }),
+							out: process.stdout,
+							timeoutMs,
+							consume,
+							...(opts.completeSignal !== undefined
+								? { completeSignal: opts.completeSignal }
+								: {}),
+						}),
+					onIterationDone: (_iteration, result) => {
+						totalUsage = addUsage(totalUsage, result.usage);
+					},
+				});
+
 				const orch: Orchestrator = {
 					// Base is already captured on the host; surface it to
 					// `orchestrate` unchanged.
@@ -302,15 +486,7 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 							...input,
 							cwd,
 						}),
-					runIteration: () =>
-						runIteration({
-							spawn: () => spawnAgent({ cwd, signal, forceSignal }),
-							out: process.stdout,
-							timeoutMs,
-							...(opts.completeSignal !== undefined
-								? { completeSignal: opts.completeSignal }
-								: {}),
-						}),
+					runIteration: wrappedRunIteration,
 				};
 
 				orchResult = await orchestrate(orch, {
@@ -320,7 +496,18 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 			},
 		});
 	} finally {
-		shutdown.dispose();
+		shutdownDispose?.();
+		const outcome = orchResult?.outcome ?? "interrupted";
+		display.renderFinalSummary({
+			iterations: orchResult?.iterations ?? 0,
+			maxIter,
+			outcome,
+			totalUsage,
+			...(orchResult?.stallReason !== undefined
+				? { stallReason: orchResult.stallReason }
+				: {}),
+		});
+		await structuredLog.close();
 	}
 
 	if (orchResult === undefined) {

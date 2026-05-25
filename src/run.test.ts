@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import type { IterationResult } from "./iteration.js";
+import type { IterationOutcome, IterationResult } from "./iteration.js";
 import { type Orchestrator, orchestrate } from "./run.js";
+
+const ZERO_USAGE = {
+	inputTokens: 0,
+	outputTokens: 0,
+	cacheCreateTokens: 0,
+	cacheReadTokens: 0,
+};
+
+function iterResult(
+	outcome: IterationOutcome,
+	exitCode: number | null,
+): IterationResult {
+	return { outcome, exitCode, usage: ZERO_USAGE };
+}
 
 const DEFAULT_QG_REPORT = {
 	prTitle: "feat: stub",
@@ -27,10 +41,7 @@ function makeOrchestrator(overrides: Partial<Orchestrator> = {}): Orchestrator {
 describe("orchestrate", () => {
 	it("opens a draft PR after the first iteration that produces commits and marks it ready when the agent emits the completion signal", async () => {
 		const orch = makeOrchestrator({
-			runIteration: vi.fn(async () => ({
-				outcome: "complete",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("complete", 0)),
 		});
 
 		const result = await orchestrate(orch, {
@@ -55,10 +66,7 @@ describe("orchestrate", () => {
 
 	it("leaves the PR draft when the invocation stalls at max-iter", async () => {
 		const orch = makeOrchestrator({
-			runIteration: vi.fn(async () => ({
-				outcome: "continue",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("continue", 0)),
 		});
 
 		const result = await orchestrate(orch, {
@@ -86,7 +94,7 @@ describe("orchestrate", () => {
 			}),
 			runIteration: vi.fn(async (iteration: number) => {
 				callOrder.push(`runIteration#${iteration}`);
-				return { outcome: "continue", exitCode: 0 } as IterationResult;
+				return iterResult("continue", 0);
 			}),
 		});
 
@@ -112,7 +120,7 @@ describe("orchestrate", () => {
 		const orch = makeOrchestrator({
 			runIteration: vi.fn(async () => {
 				iterations += 1;
-				return { outcome: "continue", exitCode: 0 } as IterationResult;
+				return iterResult("continue", 0);
 			}),
 			// 0 commits on the first poll, 1 on the second.
 			commitsAhead: vi
@@ -131,10 +139,7 @@ describe("orchestrate", () => {
 	it("refuses to open a PR when a STALLED invocation produced no commits", async () => {
 		const orch = makeOrchestrator({
 			commitsAhead: vi.fn(async () => 0),
-			runIteration: vi.fn(async () => ({
-				outcome: "continue",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("continue", 0)),
 		});
 
 		await expect(
@@ -151,10 +156,7 @@ describe("orchestrate", () => {
 		// we should not throw, and we should not open an empty PR.
 		const orch = makeOrchestrator({
 			commitsAhead: vi.fn(async () => 0),
-			runIteration: vi.fn(async () => ({
-				outcome: "complete",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("complete", 0)),
 		});
 
 		const result = await orchestrate(orch, {
@@ -174,10 +176,7 @@ describe("orchestrate", () => {
 		// by signal, the work is incomplete, and the PR should stay draft
 		// so a reviewer sees it as "in progress, came back later".
 		const orch = makeOrchestrator({
-			runIteration: vi.fn(async () => ({
-				outcome: "signal-killed",
-				exitCode: null,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("signal-killed", null)),
 		});
 
 		const result = await orchestrate(orch, {
@@ -196,10 +195,7 @@ describe("orchestrate", () => {
 		// only applies to stalled runs.
 		const orch = makeOrchestrator({
 			commitsAhead: vi.fn(async () => 0),
-			runIteration: vi.fn(async () => ({
-				outcome: "signal-killed",
-				exitCode: null,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("signal-killed", null)),
 		});
 
 		const result = await orchestrate(orch, {
@@ -225,10 +221,7 @@ describe("orchestrate", () => {
 
 	it("runs the quality gate exactly once at COMPLETE, then marks the PR ready", async () => {
 		const orch = makeOrchestrator({
-			runIteration: vi.fn(async () => ({
-				outcome: "complete",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("complete", 0)),
 		});
 
 		const result = await orchestrate(orch, {
@@ -249,10 +242,7 @@ describe("orchestrate", () => {
 
 	it("does NOT run the quality gate when the invocation stalls", async () => {
 		const orch = makeOrchestrator({
-			runIteration: vi.fn(async () => ({
-				outcome: "continue",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("continue", 0)),
 		});
 
 		const result = await orchestrate(orch, {
@@ -268,10 +258,7 @@ describe("orchestrate", () => {
 
 	it("does NOT run the quality gate when interrupted", async () => {
 		const orch = makeOrchestrator({
-			runIteration: vi.fn(async () => ({
-				outcome: "signal-killed",
-				exitCode: null,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("signal-killed", null)),
 		});
 
 		await orchestrate(orch, { branch: "feat/foo", maxIter: 5 });
@@ -282,10 +269,7 @@ describe("orchestrate", () => {
 
 	it("leaves the PR draft and records qgError when the quality gate throws", async () => {
 		const orch = makeOrchestrator({
-			runIteration: vi.fn(async () => ({
-				outcome: "complete",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("complete", 0)),
 			runQualityGate: vi.fn(async () => {
 				throw new Error("agent crashed");
 			}),
@@ -307,10 +291,7 @@ describe("orchestrate", () => {
 	it("skips the quality gate when COMPLETE produced no commits (no PR to edit)", async () => {
 		const orch = makeOrchestrator({
 			commitsAhead: vi.fn(async () => 0),
-			runIteration: vi.fn(async () => ({
-				outcome: "complete",
-				exitCode: 0,
-			})) as Orchestrator["runIteration"],
+			runIteration: vi.fn(async () => iterResult("complete", 0)),
 		});
 
 		const result = await orchestrate(orch, {
