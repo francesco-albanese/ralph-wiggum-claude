@@ -317,6 +317,7 @@ export function wireDisplay(args: {
 export function pricedRunIteration(args: {
 	readonly display: StreamDisplay;
 	readonly log: StructuredLog;
+	readonly cost: CostCalculator;
 	readonly maxIter: number;
 	readonly spawnRunIteration: (
 		consume: NonNullable<RunIterationOptions["consume"]>,
@@ -354,7 +355,7 @@ export function pricedRunIteration(args: {
 			(result.model !== undefined
 				? {
 						usage: result.usage,
-						cost: zeroCost(),
+						cost: args.cost.priceUsage(result.model, result.usage),
 						model: result.model,
 						taskClosed: result.outcome === "complete",
 					}
@@ -410,7 +411,11 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 	// `wireDisplay` opens the log file. Everything from here on must
 	// run inside a try/finally that closes it, otherwise a thrown
 	// `installGracefulShutdown` (or any later setup step) leaks the fd.
-	const { log: structuredLog, display } = wireDisplay({
+	const {
+		log: structuredLog,
+		cost,
+		display,
+	} = wireDisplay({
 		repoRoot,
 		...(opts.completeSignal !== undefined
 			? { completeSignal: opts.completeSignal }
@@ -438,6 +443,7 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 				const wrappedRunIteration = pricedRunIteration({
 					display,
 					log: structuredLog,
+					cost,
 					maxIter,
 					spawnRunIteration: (consume) =>
 						runIteration({

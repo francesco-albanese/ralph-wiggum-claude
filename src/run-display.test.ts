@@ -94,6 +94,7 @@ describe("pricedRunIteration", () => {
 		const runOne = pricedRunIteration({
 			display: stack.display,
 			log: stack.log,
+			cost: stack.cost,
 			maxIter: 5,
 			spawnRunIteration: async (consume, _iteration) => {
 				// Drive `consume` with a tiny inline stream so the
@@ -158,6 +159,7 @@ describe("pricedRunIteration", () => {
 		const runOne = pricedRunIteration({
 			display: stack.display,
 			log: stack.log,
+			cost: stack.cost,
 			maxIter: 3,
 			// `spawnRunIteration` resolves without ever calling `consume`
 			// — e.g. the child crashed before producing any stdout. We
@@ -195,6 +197,7 @@ describe("pricedRunIteration", () => {
 		const runOne = pricedRunIteration({
 			display: stack.display,
 			log: stack.log,
+			cost: stack.cost,
 			maxIter: 3,
 			spawnRunIteration: async () => ({
 				outcome: "crashed",
@@ -214,6 +217,38 @@ describe("pricedRunIteration", () => {
 					exitCode: 42,
 				}),
 			);
+		} finally {
+			await stack.log.close();
+		}
+	});
+
+	it("prices fallback usage when no stream accumulator exists", async () => {
+		const root = mkdtempSync(join(tmpdir(), "ralph-prn-"));
+		const stack = wireDisplay({ repoRoot: root });
+
+		const runOne = pricedRunIteration({
+			display: stack.display,
+			log: stack.log,
+			cost: stack.cost,
+			maxIter: 3,
+			spawnRunIteration: async () => ({
+				outcome: "crashed",
+				exitCode: 1,
+				usage: {
+					inputTokens: 1_000_000,
+					outputTokens: 0,
+					cacheCreateTokens: 0,
+					cacheReadTokens: 0,
+				},
+				model: "claude-opus-4-7",
+			}),
+			onIterationDone: () => {},
+		});
+
+		try {
+			await runOne(1);
+			expect(stack.cost.total().inputUsd).toBeCloseTo(15);
+			expect(stack.cost.total().totalUsd).toBeCloseTo(15);
 		} finally {
 			await stack.log.close();
 		}
