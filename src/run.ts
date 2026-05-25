@@ -233,7 +233,15 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 	// and the log captures every iteration.
 	const structuredLog = openLog(repoRoot);
 	const cost = new CostCalculator();
-	const display = new StreamDisplay({ cost, log: structuredLog });
+	const display = new StreamDisplay({
+		cost,
+		log: structuredLog,
+		// Forward --complete-signal so the "task closed" flag in the
+		// per-iteration summary respects the user's override.
+		...(opts.completeSignal !== undefined
+			? { completeSignal: opts.completeSignal }
+			: {}),
+	});
 	let totalUsage = EMPTY_USAGE;
 	// Per-iteration accumulator stash, owned by THIS invocation only
 	// (the `Map` is scoped to `runCommand` to avoid cross-invocation

@@ -121,8 +121,6 @@ function* parseEvent(event: unknown): Generator<ParsedStreamEvent, void, void> {
 		const message = event.message;
 		if (!isRecord(message)) return;
 
-		const model = typeof message.model === "string" ? message.model : undefined;
-
 		const content = message.content;
 		if (Array.isArray(content)) {
 			for (const block of content) {
@@ -136,18 +134,17 @@ function* parseEvent(event: unknown): Generator<ParsedStreamEvent, void, void> {
 			}
 		}
 
-		const usage = parseUsage(message.usage);
-		if (usage !== undefined) {
-			yield model !== undefined
-				? { kind: "usage", usage, model }
-				: { kind: "usage", usage };
-		}
+		// NB: we intentionally DO NOT surface usage from `assistant`
+		// events. Claude Code emits per-message usage there which would
+		// double-count against the authoritative final `result.usage`
+		// event. Cost is computed from `result` only.
 		return;
 	}
 
 	if (type === "result") {
 		// Terminal event — Claude Code reports the authoritative
-		// final usage here. Surface it so cost/log get the final word.
+		// final usage here. The ONLY usage source we trust so the
+		// per-iteration totals are correct end-to-end.
 		const usage = parseUsage(event.usage);
 		if (usage !== undefined) {
 			const model = typeof event.model === "string" ? event.model : undefined;

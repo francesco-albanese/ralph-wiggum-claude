@@ -1,7 +1,6 @@
 import type { Readable, Writable } from "node:stream";
 import { log } from "@clack/prompts";
 import {
-	addUsage,
 	type CostBreakdown,
 	type CostCalculator,
 	EMPTY_USAGE,
@@ -164,15 +163,14 @@ export class StreamDisplay {
 			case "tool":
 				return;
 			case "usage": {
-				acc.usage = addUsage(acc.usage, event.usage);
-				if (event.model !== undefined && acc.model === undefined) {
-					acc.model = event.model;
-				}
-				const breakdown = this.cost.priceUsage(
-					event.model ?? acc.model,
-					event.usage,
-				);
-				acc.cost = addCost(acc.cost, breakdown);
+				// `stream.ts` only surfaces usage from the terminal
+				// `result` event, so we expect a single usage event per
+				// iteration. Using last-writer-wins (not additive) keeps
+				// the math correct even if a future agent provider
+				// emits multiple snapshots.
+				acc.usage = event.usage;
+				if (event.model !== undefined) acc.model = event.model;
+				acc.cost = this.cost.priceUsage(event.model ?? acc.model, event.usage);
 				return;
 			}
 		}
@@ -290,15 +288,5 @@ function zeroCost(): CostBreakdown {
 		cacheCreateUsd: 0,
 		cacheReadUsd: 0,
 		totalUsd: 0,
-	};
-}
-
-function addCost(a: CostBreakdown, b: CostBreakdown): CostBreakdown {
-	return {
-		inputUsd: a.inputUsd + b.inputUsd,
-		outputUsd: a.outputUsd + b.outputUsd,
-		cacheCreateUsd: a.cacheCreateUsd + b.cacheCreateUsd,
-		cacheReadUsd: a.cacheReadUsd + b.cacheReadUsd,
-		totalUsd: a.totalUsd + b.totalUsd,
 	};
 }
