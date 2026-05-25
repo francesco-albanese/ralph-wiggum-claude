@@ -100,8 +100,12 @@ describe("StreamDisplay.consume", () => {
 				type: "assistant",
 				message: {
 					content: [
-						{ type: "text", text: "thinking..." },
-						{ type: "tool_use", name: "Bash", input: { command: "bd ready" } },
+						{ type: "text", text: "thinking with secret-token" },
+						{
+							type: "tool_use",
+							name: "Bash",
+							input: { command: "echo secret-token" },
+						},
 					],
 				},
 			})}\n`,
@@ -148,11 +152,43 @@ describe("StreamDisplay.consume", () => {
 		const stripped = sink
 			.join("")
 			.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
-		expect(stripped).toContain("Bash: bd ready");
-		expect(stripped).toContain("thinking...");
+		expect(stripped).toContain("Bash: echo secret-token");
+		expect(stripped).toContain("thinking with secret-token");
 
-		// Every parsed event is in the log (init + text + tool + text + usage)
+		// Every parsed event is in the log, but text/tool payloads are redacted.
 		const streamEvents = log.entries.filter((e) => e.event === "stream");
 		expect(streamEvents.length).toBeGreaterThanOrEqual(5);
+		expect(JSON.stringify(streamEvents)).not.toContain("secret-token");
+		expect(streamEvents).toContainEqual(
+			expect.objectContaining({
+				payload: { kind: "tool", name: "Bash", input: "[redacted]" },
+			}),
+		);
+	});
+
+	it("detects completion deterministically with a global regex", async () => {
+		const log = memoryLog();
+		const display = new StreamDisplay({
+			cost: new CostCalculator({ pricing: FIXTURE_PRICING, warn: () => {} }),
+			log,
+			out: new PassThrough(),
+			completeSignal: /<promise>COMPLETE<\/promise>/g,
+		});
+		const stdout = new PassThrough();
+		const consumePromise = display.consume(stdout, 1);
+		stdout.write(
+			`${JSON.stringify({
+				type: "assistant",
+				message: {
+					content: [
+						{ type: "text", text: "<promise>COMPLETE</promise>" },
+						{ type: "text", text: " and still done" },
+					],
+				},
+			})}\n`,
+		);
+		stdout.end();
+
+		await expect(consumePromise).resolves.toMatchObject({ taskClosed: true });
 	});
 });

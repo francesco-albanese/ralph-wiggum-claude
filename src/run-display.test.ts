@@ -140,17 +140,20 @@ describe("pricedRunIteration", () => {
 			expect(renderSpy.mock.calls[0]?.[0]?.maxIter).toBe(5);
 			expect(doneCalls).toHaveLength(1);
 			expect(doneCalls[0]?.iteration).toBe(2);
+			expect(doneCalls[0]?.result.outcome).toBe("continue");
 		} finally {
 			await stack.log.close();
 		}
 	});
 
-	it("skips rendering when consume was never invoked (no accumulator)", async () => {
+	it("logs iteration_end and totals when consume was never invoked", async () => {
 		const root = mkdtempSync(join(tmpdir(), "ralph-prn-"));
 		const stack = wireDisplay({ repoRoot: root });
 		const renderSpy = vi.spyOn(stack.display, "renderIterationSummary");
-		const doneSpy =
-			vi.fn<(iteration: number, result: IterationResult) => void>();
+		const doneCalls: Array<{
+			iteration: number;
+			result: IterationResult;
+		}> = [];
 
 		const runOne = pricedRunIteration({
 			display: stack.display,
@@ -165,14 +168,52 @@ describe("pricedRunIteration", () => {
 				exitCode: 1,
 				usage: ZERO_USAGE,
 			}),
-			onIterationDone: doneSpy,
+			onIterationDone: (iteration, result) => {
+				doneCalls.push({ iteration, result });
+			},
 		});
 
 		try {
 			const result = await runOne(1);
 			expect(result.outcome).toBe("crashed");
 			expect(renderSpy).not.toHaveBeenCalled();
-			expect(doneSpy).not.toHaveBeenCalled();
+			expect(doneCalls).toHaveLength(1);
+			expect(doneCalls[0]?.iteration).toBe(1);
+		} finally {
+			await stack.log.close();
+		}
+	});
+
+	it("records real iteration outcome and exitCode in iteration_end logs", async () => {
+		const root = mkdtempSync(join(tmpdir(), "ralph-prn-"));
+		const stack = wireDisplay({ repoRoot: root });
+		const entries: unknown[] = [];
+		vi.spyOn(stack.log, "write").mockImplementation((event) => {
+			entries.push(event);
+		});
+
+		const runOne = pricedRunIteration({
+			display: stack.display,
+			log: stack.log,
+			maxIter: 3,
+			spawnRunIteration: async () => ({
+				outcome: "crashed",
+				exitCode: 42,
+				usage: ZERO_USAGE,
+			}),
+			onIterationDone: () => {},
+		});
+
+		try {
+			await runOne(1);
+			expect(entries).toContainEqual(
+				expect.objectContaining({
+					event: "iteration_end",
+					iteration: 1,
+					outcome: "crashed",
+					exitCode: 42,
+				}),
+			);
 		} finally {
 			await stack.log.close();
 		}

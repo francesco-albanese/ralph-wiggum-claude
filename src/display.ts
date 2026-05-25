@@ -5,6 +5,7 @@ import {
 	type CostCalculator,
 	EMPTY_USAGE,
 } from "./cost.js";
+import type { IterationResult } from "./iteration.js";
 import type { StructuredLog } from "./log.js";
 import {
 	type IterationUsage,
@@ -107,7 +108,7 @@ export class StreamDisplay {
 				event: "stream",
 				ts: new Date().toISOString(),
 				iteration,
-				payload: event,
+				payload: redactStreamEvent(event),
 			});
 			this.render(event);
 			this.fold(acc, event);
@@ -155,6 +156,7 @@ export class StreamDisplay {
 				this.accumulatedText = (this.accumulatedText + event.text).slice(
 					-4_096,
 				);
+				this.completeSignal.lastIndex = 0;
 				if (this.completeSignal.test(this.accumulatedText)) {
 					acc.taskClosed = true;
 				}
@@ -181,6 +183,7 @@ export class StreamDisplay {
 		iteration: number;
 		maxIter: number;
 		acc: IterationAccumulator;
+		result: IterationResult;
 	}): void {
 		const summary: IterationSummary = {
 			iteration: args.iteration,
@@ -191,12 +194,25 @@ export class StreamDisplay {
 			...(args.acc.model !== undefined ? { model: args.acc.model } : {}),
 		};
 		renderIterationSummary(summary, this.out);
+		this.recordIterationEnd({
+			iteration: args.iteration,
+			result: args.result,
+			acc: args.acc,
+		});
+	}
+
+	/** Persist the iteration boundary even when there was nothing to render. */
+	recordIterationEnd(args: {
+		iteration: number;
+		result: IterationResult;
+		acc: IterationAccumulator;
+	}): void {
 		this.slog.write({
 			event: "iteration_end",
 			ts: new Date().toISOString(),
 			iteration: args.iteration,
-			outcome: "rendered",
-			exitCode: null,
+			outcome: args.result.outcome,
+			exitCode: args.result.exitCode,
 			taskClosed: args.acc.taskClosed,
 			usage: args.acc.usage,
 			cost: args.acc.cost,
@@ -289,4 +305,19 @@ function zeroCost(): CostBreakdown {
 		cacheReadUsd: 0,
 		totalUsd: 0,
 	};
+}
+
+function redactStreamEvent(event: ParsedStreamEvent): ParsedStreamEvent {
+	switch (event.kind) {
+		case "text":
+			return { kind: "text", text: redactedText(event.text) };
+		case "tool":
+			return { kind: "tool", name: event.name, input: "[redacted]" };
+		default:
+			return event;
+	}
+}
+
+function redactedText(text: string): string {
+	return `[redacted ${text.length} chars]`;
 }

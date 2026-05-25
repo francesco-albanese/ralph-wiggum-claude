@@ -349,16 +349,43 @@ export function pricedRunIteration(args: {
 		};
 
 		const result = await args.spawnRunIteration(consume, iteration);
+		const endAcc =
+			acc ??
+			(result.model !== undefined
+				? {
+						usage: result.usage,
+						cost: zeroCost(),
+						model: result.model,
+						taskClosed: result.outcome === "complete",
+					}
+				: {
+						usage: result.usage,
+						cost: zeroCost(),
+						taskClosed: result.outcome === "complete",
+					});
 
 		if (acc !== undefined) {
 			args.display.renderIterationSummary({
 				iteration,
 				maxIter: args.maxIter,
 				acc,
+				result,
 			});
-			args.onIterationDone(iteration, result, acc);
+		} else {
+			args.display.recordIterationEnd({ iteration, result, acc: endAcc });
 		}
+		args.onIterationDone(iteration, result, endAcc);
 		return result;
+	};
+}
+
+function zeroCost() {
+	return {
+		inputUsd: 0,
+		outputUsd: 0,
+		cacheCreateUsd: 0,
+		cacheReadUsd: 0,
+		totalUsd: 0,
 	};
 }
 
