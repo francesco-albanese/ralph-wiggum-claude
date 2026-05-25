@@ -336,7 +336,7 @@ export async function captureRepoRoot(): Promise<string> {
 		cmd: "git",
 		args: ["worktree", "list", "--porcelain"],
 	});
-	const firstLine = stdout.split("\n", 1)[0] ?? "";
+	const firstLine = stdout.split(/\r?\n/, 1)[0] ?? "";
 	const match = firstLine.match(/^worktree (.+)$/);
 	const root = match?.[1];
 	if (root === undefined) {
