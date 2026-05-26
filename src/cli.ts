@@ -3,6 +3,12 @@ import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { cleanup, createDefaultPorts, formatCleanupReport } from "./cleanup.js";
 import { AGENT_NAMES, type AgentName } from "./config/schema.js";
+import {
+	runDetachedCommand,
+	statusCommand,
+	stopCommand,
+	tailCommand,
+} from "./daemon.js";
 import { runInit } from "./init/index.js";
 import { runProc } from "./proc.js";
 import { captureRepoRoot, type RunOptions, runCommand } from "./run.js";
@@ -16,6 +22,7 @@ export interface RawCliOptions {
 	readonly maxIter?: string;
 	readonly timeoutMin?: string;
 	readonly completeSignal?: string;
+	readonly detach?: boolean;
 }
 
 /**
@@ -27,6 +34,7 @@ export function parseRunOptions(raw: RawCliOptions): Required<
 	Pick<RunOptions, "branch" | "agent" | "maxIter" | "timeoutMin">
 > & {
 	readonly completeSignal?: RegExp;
+	readonly detach: boolean;
 } {
 	const maxIter =
 		raw.maxIter !== undefined
@@ -48,9 +56,14 @@ export function parseRunOptions(raw: RawCliOptions): Required<
 		}
 	}
 
-	return completeSignal !== undefined
-		? { branch: raw.branch, agent, maxIter, timeoutMin, completeSignal }
-		: { branch: raw.branch, agent, maxIter, timeoutMin };
+	const base = {
+		branch: raw.branch,
+		agent,
+		maxIter,
+		timeoutMin,
+		detach: raw.detach === true,
+	};
+	return completeSignal !== undefined ? { ...base, completeSignal } : base;
 }
 
 function parseAgent(value: string | undefined): AgentName {
@@ -66,6 +79,15 @@ function parsePositiveInt(value: string, flag: string): number {
 		throw new Error(`${flag} must be a positive integer (got ${value})`);
 	}
 	return n;
+}
+
+function parseOptionalPid(value: string | undefined): number | undefined {
+	if (value === undefined) return undefined;
+	return parsePositiveInt(value, "pid");
+}
+
+function nodeEnv(): NodeJS.ProcessEnv {
+	return Reflect.get(process, "env") as NodeJS.ProcessEnv;
 }
 
 const program = new Command();
@@ -105,10 +127,23 @@ program
 		`Agent provider to run (${AGENT_NAMES.join("|")})`,
 		"claude",
 	)
+	.option("--detach", "Run in the background and print pid + log path", false)
 	.action(async (raw: RawCliOptions) => {
 		try {
 			const opts = parseRunOptions(raw);
-			const result = await runCommand(opts);
+			if (opts.detach) {
+				const result = await runDetachedCommand(opts);
+				console.log(`pid=${result.pid} log=${result.logPath}`);
+				return;
+			}
+			const env = nodeEnv();
+			const result = await runCommand({
+				...opts,
+				state: env.RALPH_DETACHED_STATE === "1",
+				...(env.RALPH_DETACHED_LOG_PATH !== undefined
+					? { logPath: env.RALPH_DETACHED_LOG_PATH }
+					: {}),
+			});
 
 			if (result.outcome === "interrupted") {
 				console.error(
@@ -138,6 +173,48 @@ program
 				}
 				console.log(result.prUrl);
 			}
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`ralph: ${msg}`);
+			process.exit(1);
+		}
+	});
+
+program
+	.command("status")
+	.description("List active detached Ralph runs")
+	.action(async () => {
+		try {
+			await statusCommand();
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`ralph: ${msg}`);
+			process.exit(1);
+		}
+	});
+
+program
+	.command("tail")
+	.description("Follow a detached Ralph run log")
+	.argument("[pid]", "Process id to tail")
+	.action(async (pid: string | undefined) => {
+		try {
+			await tailCommand(parseOptionalPid(pid));
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			console.error(`ralph: ${msg}`);
+			process.exit(1);
+		}
+	});
+
+program
+	.command("stop")
+	.description("Stop a detached Ralph run")
+	.argument("[pid]", "Process id to stop")
+	.action(async (pid: string | undefined) => {
+		try {
+			const state = await stopCommand(parseOptionalPid(pid));
+			console.log(`sent SIGTERM to pid=${state.pid}`);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			console.error(`ralph: ${msg}`);

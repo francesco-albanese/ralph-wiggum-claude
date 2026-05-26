@@ -28,6 +28,7 @@ import {
 	runInWorktree,
 	spawnAgent,
 } from "./run/runtime.js";
+import { type RunState, StateStore } from "./state.js";
 
 export interface RunOptions {
 	readonly branch: string;
@@ -36,6 +37,8 @@ export interface RunOptions {
 	readonly maxIter?: number;
 	readonly timeoutMin?: number;
 	readonly completeSignal?: RegExp;
+	readonly state?: boolean;
+	readonly logPath?: string;
 }
 
 const DEFAULT_MAX_ITER = 10;
@@ -86,6 +89,8 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 		opts.agent ?? DEFAULT_CONFIG.defaultAgent,
 		opts.model ?? DEFAULT_CONFIG.defaultModel,
 	);
+	const agent = provider.name;
+	let model = opts.model ?? DEFAULT_CONFIG.defaultModel;
 
 	const baseBranch = await hostCaptureBaseBranch();
 	await hostEnsureCleanWorktree();
@@ -98,14 +103,36 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 		display,
 	} = wireDisplay({
 		repoRoot,
+		...(opts.logPath !== undefined ? { logPath: opts.logPath } : {}),
 		...(opts.completeSignal !== undefined
 			? { completeSignal: opts.completeSignal }
 			: {}),
 		provider,
 	});
+	const stateStore = new StateStore(repoRoot);
+	const startedAtIso = new Date(startedAt).toISOString();
 	let totalUsage = EMPTY_USAGE;
 	let shutdownDispose: (() => void) | null = null;
+	const writeState = (overrides: Partial<RunState> = {}) => {
+		if (opts.state !== true) return;
+		stateStore.write({
+			pid: process.pid,
+			branch: opts.branch,
+			agent,
+			model,
+			startedAt: startedAtIso,
+			iteration: orchResult?.iterations ?? 0,
+			currentBead: null,
+			tasksDone: [],
+			tokens: totalUsage,
+			costUsd: cost.total().totalUsd,
+			logPath: structuredLog.path,
+			prUrl: orchResult?.prUrl ?? "",
+			...overrides,
+		});
+	};
 	try {
+		writeState();
 		structuredLog.write({
 			event: "invocation_start",
 			ts: new Date().toISOString(),
@@ -140,6 +167,8 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 						}),
 					onIterationDone: (_iteration, result) => {
 						totalUsage = addUsage(totalUsage, result.usage);
+						if (result.model !== undefined) model = result.model;
+						writeState({ iteration: _iteration });
 					},
 				});
 
@@ -162,6 +191,10 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 				orchResult = await orchestrate(orch, {
 					branch: opts.branch,
 					maxIter,
+				});
+				writeState({
+					iteration: orchResult.iterations,
+					prUrl: orchResult.prUrl,
 				});
 			},
 		});
@@ -192,6 +225,7 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 			});
 		}
 		await structuredLog.close();
+		if (opts.state === true) stateStore.remove(process.pid);
 	}
 
 	if (orchResult === undefined) {

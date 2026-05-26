@@ -19,8 +19,11 @@ export function wireDisplay(args: {
 	readonly repoRoot: string;
 	readonly completeSignal?: RegExp;
 	readonly provider?: AgentProvider;
+	readonly logPath?: string;
 }): DisplayStack {
-	const log = openLog(args.repoRoot);
+	const log = openLog(args.repoRoot, {
+		...(args.logPath !== undefined ? { path: args.logPath } : {}),
+	});
 	const cost = new CostCalculator();
 	const display = new StreamDisplay({
 		cost,
