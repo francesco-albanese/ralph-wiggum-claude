@@ -1,5 +1,5 @@
 import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { CostBreakdown } from "./cost.js";
 import type { IterationUsage, ParsedStreamEvent } from "./stream.js";
 
@@ -75,6 +75,8 @@ export type OpenLogOptions = {
 	readonly now?: () => Date;
 	/** Override the pid — tests use a fixed value for determinism. */
 	readonly pid?: number;
+	/** Full path override — detached mode preallocates the file after spawn. */
+	readonly path?: string;
 };
 
 /**
@@ -87,6 +89,10 @@ export function openLog(
 	opts: OpenLogOptions = {},
 ): StructuredLog {
 	const dir = join(repoRoot, opts.dir ?? ".ralph/logs");
+	if (opts.path !== undefined) {
+		mkdirSync(dirname(opts.path), { recursive: true });
+		return openLogPath(opts.path);
+	}
 	mkdirSync(dir, { recursive: true });
 
 	const ts = (opts.now ?? (() => new Date()))()
@@ -95,6 +101,10 @@ export function openLog(
 		.replace(/-\d{3}Z$/, "Z");
 	const pid = opts.pid ?? process.pid;
 	const path = join(dir, `${ts}-${pid}.log`);
+	return openLogPath(path);
+}
+
+function openLogPath(path: string): StructuredLog {
 	const stream: WriteStream = createWriteStream(path, {
 		flags: "a",
 		encoding: "utf8",

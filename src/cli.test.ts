@@ -9,6 +9,7 @@ describe("parseRunOptions", () => {
 			agent: "claude",
 			maxIter: 10,
 			timeoutMin: 30,
+			detach: false,
 		});
 		expect(opts.completeSignal).toBeUndefined();
 	});
@@ -45,6 +46,12 @@ describe("parseRunOptions", () => {
 		});
 		expect(opts.completeSignal).toBeInstanceOf(RegExp);
 		expect(opts.completeSignal?.test("DONE_OK")).toBe(true);
+	});
+
+	it("parses --detach", () => {
+		expect(parseRunOptions({ branch: "feat/x", detach: true }).detach).toBe(
+			true,
+		);
 	});
 
 	it("rejects an invalid --complete-signal regex with a clear error", () => {
