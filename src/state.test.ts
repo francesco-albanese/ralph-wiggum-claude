@@ -4,6 +4,7 @@ import {
 	readdirSync,
 	readFileSync,
 	rmSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,5 +78,16 @@ describe("StateStore", () => {
 		expect(active.map((state) => state.pid)).toEqual([2]);
 		expect(existsSync(store.pathFor(1))).toBe(false);
 		expect(existsSync(store.pathFor(2))).toBe(true);
+	});
+
+	it("ignores malformed state files instead of trusting pid values", () => {
+		store.write(makeState(1));
+		writeFileSync(
+			join(root, ".ralph/state/bad.json"),
+			JSON.stringify({ pid: "../bad", startedAt: "2026-05-25T00:00:00.000Z" }),
+		);
+
+		expect(store.list().map((state) => state.pid)).toEqual([1]);
+		expect(() => store.remove(Number.NaN)).not.toThrow();
 	});
 });

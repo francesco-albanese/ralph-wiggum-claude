@@ -89,12 +89,11 @@ export function openLog(
 	opts: OpenLogOptions = {},
 ): StructuredLog {
 	const dir = join(repoRoot, opts.dir ?? ".ralph/logs");
-	mkdirSync(dir, { recursive: true });
-
 	if (opts.path !== undefined) {
 		mkdirSync(dirname(opts.path), { recursive: true });
 		return openLogPath(opts.path);
 	}
+	mkdirSync(dir, { recursive: true });
 
 	const ts = (opts.now ?? (() => new Date()))()
 		.toISOString()

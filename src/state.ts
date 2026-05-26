@@ -48,6 +48,7 @@ export class StateStore {
 	}
 
 	remove(pid: number): void {
+		if (!Number.isInteger(pid) || pid <= 0) return;
 		rmSync(this.pathFor(pid), { force: true });
 	}
 
@@ -62,9 +63,8 @@ export class StateStore {
 			.filter((file) => file.endsWith(".json"))
 			.flatMap((file) => {
 				try {
-					return [
-						JSON.parse(readFileSync(join(this.dir, file), "utf8")) as RunState,
-					];
+					const parsed = JSON.parse(readFileSync(join(this.dir, file), "utf8"));
+					return isRunState(parsed) ? [parsed] : [];
 				} catch {
 					return [];
 				}
@@ -80,6 +80,35 @@ export class StateStore {
 		}
 		return active;
 	}
+}
+
+function isRunState(value: unknown): value is RunState {
+	if (typeof value !== "object" || value === null) return false;
+	const state = value as Partial<RunState>;
+	return (
+		Number.isInteger(state.pid) &&
+		(state.pid ?? 0) > 0 &&
+		typeof state.branch === "string" &&
+		typeof state.agent === "string" &&
+		typeof state.model === "string" &&
+		typeof state.startedAt === "string" &&
+		Number.isInteger(state.iteration) &&
+		typeof state.costUsd === "number" &&
+		typeof state.logPath === "string" &&
+		typeof state.prUrl === "string" &&
+		isTokens(state.tokens)
+	);
+}
+
+function isTokens(value: unknown): value is RunState["tokens"] {
+	if (typeof value !== "object" || value === null) return false;
+	const tokens = value as Partial<RunState["tokens"]>;
+	return (
+		typeof tokens.inputTokens === "number" &&
+		typeof tokens.outputTokens === "number" &&
+		typeof tokens.cacheCreateTokens === "number" &&
+		typeof tokens.cacheReadTokens === "number"
+	);
 }
 
 export function processIsAlive(pid: number): boolean {

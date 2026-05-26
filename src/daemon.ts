@@ -37,7 +37,10 @@ export async function runDetachedCommand(
 	});
 	closeSync(logFd);
 	child.unref();
-	return { pid: child.pid ?? 0, logPath };
+	if (child.pid === undefined) {
+		throw new Error("failed to start detached run: child pid unavailable");
+	}
+	return { pid: child.pid, logPath };
 }
 
 export async function statusCommand(
