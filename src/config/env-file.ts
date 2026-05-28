@@ -13,12 +13,7 @@ export const ENV_FILE_NAME = ".ralph/.env";
  * struct. To extend secrets with custom keys, add them to
  * `.ralph/.env` (the schema's `.passthrough()` accepts them).
  */
-const KNOWN_SECRET_KEYS = [
-	"WHATSAPP_PHONE",
-	"WHATSAPP_APIKEY",
-	"ANTHROPIC_API_KEY",
-	"OPENAI_API_KEY",
-] as const;
+const KNOWN_SECRET_KEYS = ["WHATSAPP_PHONE", "WHATSAPP_APIKEY"] as const;
 
 export type EnvFileReadResult = {
 	readonly value: RalphSecrets;

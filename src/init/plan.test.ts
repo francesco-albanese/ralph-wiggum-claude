@@ -45,18 +45,17 @@ describe("planInit", () => {
 		expect(parsed.branchPrefixes).toEqual(["feat", "fix"]);
 	});
 
-	it("env example contains the four required secret keys (no leaked values)", () => {
+	it("env example contains the WhatsApp secret keys (no leaked values)", () => {
 		const plan = planInit(ANSWERS, undefined);
 		const env = plan.writes.find((w) => w.path === RALPH_PATHS.envExample);
 		const content = env?.content ?? "";
-		for (const key of [
-			"WHATSAPP_PHONE=",
-			"WHATSAPP_APIKEY=",
-			"ANTHROPIC_API_KEY=",
-			"OPENAI_API_KEY=",
-		]) {
+		for (const key of ["WHATSAPP_PHONE=", "WHATSAPP_APIKEY="]) {
 			expect(content).toContain(key);
 		}
+		// Agent API keys are inert (never injected into the subprocess) so they
+		// must NOT be scaffolded — see ralph-wiggum-claude-coh.
+		expect(content).not.toContain("ANTHROPIC_API_KEY");
+		expect(content).not.toContain("OPENAI_API_KEY");
 		// No accidental values shipped
 		expect(content).toMatch(/WHATSAPP_PHONE=\s*$/m);
 	});

@@ -14,6 +14,12 @@ import {
 } from "@clack/prompts";
 import { DEFAULT_CONFIG } from "../config/defaults.js";
 import { AGENT_NAMES, type AgentName } from "../config/schema.js";
+import { loadBundledPricing } from "../cost.js";
+import {
+	CUSTOM_MODEL_VALUE,
+	defaultModelForAgent,
+	modelOptionsForAgent,
+} from "./models.js";
 import {
 	type InitAnswers,
 	type InitPlan,
@@ -90,12 +96,8 @@ async function collectAnswers(): Promise<InitAnswers | undefined> {
 	});
 	if (isCancel(defaultAgent)) return cancelAndExit();
 
-	const defaultModel = await text({
-		message: "Default model",
-		placeholder: DEFAULT_CONFIG.defaultModel,
-		defaultValue: DEFAULT_CONFIG.defaultModel,
-	});
-	if (isCancel(defaultModel)) return cancelAndExit();
+	const defaultModel = await pickModel(defaultAgent);
+	if (defaultModel === undefined) return cancelAndExit();
 
 	const maxIterRaw = await text({
 		message: "Max iterations per invocation",
@@ -138,7 +140,7 @@ async function collectAnswers(): Promise<InitAnswers | undefined> {
 
 	return {
 		defaultAgent,
-		defaultModel: stringOr(defaultModel, DEFAULT_CONFIG.defaultModel),
+		defaultModel,
 		maxIter: Number.parseInt(
 			stringOr(maxIterRaw, String(DEFAULT_CONFIG.maxIter)),
 			10,
@@ -149,6 +151,32 @@ async function collectAnswers(): Promise<InitAnswers | undefined> {
 			DEFAULT_CONFIG.completionSignal,
 		),
 	};
+}
+
+/**
+ * Agent-aware model prompt. Offers the pricing-table models for the chosen
+ * agent as a `select()`, plus a "Custom…" option that drops to free-text
+ * so a model not yet in pricing.json is never blocking. Returns the chosen
+ * model id, or `undefined` if the user cancelled.
+ */
+async function pickModel(agent: AgentName): Promise<string | undefined> {
+	const pricing = loadBundledPricing();
+	const picked = await select<string>({
+		message: "Default model",
+		options: [...modelOptionsForAgent(agent, pricing)],
+		initialValue: defaultModelForAgent(agent, pricing),
+	});
+	if (isCancel(picked)) return undefined;
+	if (picked !== CUSTOM_MODEL_VALUE) return picked;
+
+	const custom = await text({
+		message: "Custom model id",
+		placeholder: DEFAULT_CONFIG.defaultModel,
+		validate: (value) =>
+			(value ?? "").trim().length === 0 ? "Cannot be empty" : undefined,
+	});
+	if (isCancel(custom)) return undefined;
+	return stringOr(custom, DEFAULT_CONFIG.defaultModel);
 }
 
 function cancelAndExit(): undefined {

@@ -3,55 +3,64 @@
 	"currency": "USD",
 	"unit": "per_million_tokens",
 	"models": {
+		"claude-sonnet-4-5": {
+			"agent": "claude",
+			"input": 3.0,
+			"output": 15.0,
+			"cacheCreate": 3.75,
+			"cacheRead": 0.3
+		},
 		"claude-opus-4-7": {
+			"agent": "claude",
 			"input": 15.0,
 			"output": 75.0,
 			"cacheCreate": 18.75,
 			"cacheRead": 1.5
 		},
 		"claude-opus-4-5": {
+			"agent": "claude",
 			"input": 15.0,
 			"output": 75.0,
 			"cacheCreate": 18.75,
 			"cacheRead": 1.5
 		},
-		"claude-sonnet-4-5": {
-			"input": 3.0,
-			"output": 15.0,
-			"cacheCreate": 3.75,
-			"cacheRead": 0.3
-		},
 		"claude-haiku-4-5": {
+			"agent": "claude",
 			"input": 1.0,
 			"output": 5.0,
 			"cacheCreate": 1.25,
 			"cacheRead": 0.1
 		},
 		"gpt-5.3-codex": {
+			"agent": "codex",
 			"input": 1.75,
 			"output": 14.0,
 			"cacheCreate": 0.0,
 			"cacheRead": 0.175
 		},
 		"gpt-5.5": {
+			"agent": "codex",
 			"input": 5.0,
 			"output": 30.0,
 			"cacheCreate": 0.0,
 			"cacheRead": 0.5
 		},
 		"gpt-5.4": {
+			"agent": "codex",
 			"input": 2.5,
 			"output": 15.0,
 			"cacheCreate": 0.0,
 			"cacheRead": 0.25
 		},
 		"gpt-5.4-mini": {
+			"agent": "codex",
 			"input": 0.75,
 			"output": 4.5,
 			"cacheCreate": 0.0,
 			"cacheRead": 0.075
 		},
 		"codex-mini-latest": {
+			"agent": "codex",
 			"input": 1.5,
 			"output": 6.0,
 			"cacheCreate": 0.0,

@@ -1,14 +1,21 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AgentName } from "./config/schema.js";
 import type { IterationUsage } from "./stream.js";
 
 /**
  * Per-token-type rates for a single model, expressed in USD per
  * million tokens — matches industry pricing pages so the JSON is
  * auditable against the source.
+ *
+ * `agent` ties the model to the CLI that can run it. It is the single
+ * source of truth for the `ralph init` model picker: adding a model
+ * here both prices it and surfaces it in the picker, so there is no
+ * second list to maintain.
  */
 export type ModelPricing = {
+	readonly agent: AgentName;
 	readonly input: number;
 	readonly output: number;
 	readonly cacheCreate: number;

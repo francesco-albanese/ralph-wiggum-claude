@@ -10,6 +10,7 @@ const FIXTURE_PRICING: PricingTable = {
 	unit: "per_million_tokens",
 	models: {
 		"claude-opus-4-7": {
+			agent: "claude",
 			input: 15,
 			output: 75,
 			cacheCreate: 18.75,
