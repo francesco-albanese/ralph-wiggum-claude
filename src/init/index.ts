@@ -1,6 +1,5 @@
-import { spawn } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import {
 	cancel,
 	confirm,
@@ -15,6 +14,8 @@ import {
 import { DEFAULT_CONFIG } from "../config/defaults.js";
 import { AGENT_NAMES, type AgentName } from "../config/schema.js";
 import { loadBundledPricing } from "../cost.js";
+import { openInEditor } from "./editor.js";
+import { pathExists, safeReadFile, writeFileEnsuringDir } from "./io.js";
 import {
 	CUSTOM_MODEL_VALUE,
 	defaultModelForAgent,
@@ -221,80 +222,4 @@ async function applyPlan(cwd: string, plan: InitPlan): Promise<void> {
 		plan.gitignoreContent,
 		"utf8",
 	);
-}
-
-async function writeFileEnsuringDir(
-	target: string,
-	content: string,
-): Promise<void> {
-	await mkdir(dirname(target), { recursive: true });
-	await writeFile(target, content, "utf8");
-}
-
-async function safeReadFile(path: string): Promise<string | undefined> {
-	try {
-		return await readFile(path, "utf8");
-	} catch (err) {
-		if (isNodeErrnoException(err) && err.code === "ENOENT") return undefined;
-		throw err;
-	}
-}
-
-async function pathExists(path: string): Promise<boolean> {
-	try {
-		await stat(path);
-		return true;
-	} catch (err) {
-		if (isNodeErrnoException(err) && err.code === "ENOENT") return false;
-		throw err;
-	}
-}
-
-function isNodeErrnoException(err: unknown): err is NodeJS.ErrnoException {
-	return (
-		err instanceof Error &&
-		typeof (err as NodeJS.ErrnoException).code === "string"
-	);
-}
-
-/**
- * Spawn `$EDITOR <path>` and wait for it to exit. Falls back to a no-op
- * (with a note) when no editor is configured — running `ralph init`
- * unattended (CI, tests with `--no-editor`) shouldn't error out.
- *
- * stdio is inherited so terminal editors (vim, nano, helix) get the
- * user's TTY without ceremony. GUI editors typically return immediately
- * after spawning their window; for those, `--wait` (VSCode) or `-w`
- * (Sublime) is the user's responsibility to bake into `$EDITOR`.
- */
-async function openInEditor(path: string): Promise<void> {
-	const editor = process.env.EDITOR ?? process.env.VISUAL;
-	if (editor === undefined || editor.trim().length === 0) {
-		note(
-			`No $EDITOR set — open ${path} manually to tailor the prompt.`,
-			"editor",
-		);
-		return;
-	}
-
-	// `/bin/sh -c` so users can put flags in $EDITOR (`code --wait`,
-	// `nvim -p`, etc.) without us re-parsing shell syntax.
-	const cmd = `${editor} ${shellEscape(path)}`;
-	await new Promise<void>((resolve, reject) => {
-		const child = spawn("/bin/sh", ["-c", cmd], { stdio: "inherit" });
-		child.on("error", reject);
-		child.on("close", (code) => {
-			if (code === 0 || code === null) {
-				resolve();
-				return;
-			}
-			reject(new Error(`editor exited with code ${code}`));
-		});
-	});
-}
-
-function shellEscape(s: string): string {
-	// POSIX single-quote escape: wrap in single quotes, escape any embedded
-	// single quote as '\''. Safe for arbitrary paths including spaces.
-	return `'${s.replace(/'/g, "'\\''")}'`;
 }
