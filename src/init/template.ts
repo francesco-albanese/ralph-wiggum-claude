@@ -160,8 +160,4 @@ export const BUNDLED_ENV_EXAMPLE = `# Ralph secrets — copy to .ralph/.env and 
 # WhatsApp notify (CallMeBot). Digits-only phone, no '+' or spaces.
 WHATSAPP_PHONE=
 WHATSAPP_APIKEY=
-
-# Agent API keys (only set the ones you use).
-ANTHROPIC_API_KEY=
-OPENAI_API_KEY=
 `;

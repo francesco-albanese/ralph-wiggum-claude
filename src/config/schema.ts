@@ -118,8 +118,6 @@ export const RalphSecretsSchema = z
 	.object({
 		WHATSAPP_PHONE: PhoneNumber.optional(),
 		WHATSAPP_APIKEY: NonEmptyString.optional(),
-		ANTHROPIC_API_KEY: NonEmptyString.optional(),
-		OPENAI_API_KEY: NonEmptyString.optional(),
 	})
 	.passthrough();
 
