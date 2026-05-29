@@ -104,11 +104,12 @@ async function collectAnswers(): Promise<InitAnswers | undefined> {
 		placeholder: String(DEFAULT_CONFIG.maxIter),
 		defaultValue: String(DEFAULT_CONFIG.maxIter),
 		validate: (value) => {
-			// clack passes the raw input (or undefined when user submits an
-			// empty value with no defaultValue). Coercing undefined -> ""
-			// keeps the check simple: empty input is invalid here.
-			const raw = value ?? "";
-			const trimmed = raw.trim();
+			// clack runs validate against the raw input BEFORE substituting
+			// `defaultValue` (which only happens on finalize). So empty input
+			// must pass here — otherwise the user can't hit enter to accept
+			// the default. A typed value still has to be a positive integer.
+			const trimmed = (value ?? "").trim();
+			if (trimmed.length === 0) return undefined;
 			const n = Number.parseInt(trimmed, 10);
 			if (!Number.isFinite(n) || n <= 0 || String(n) !== trimmed) {
 				return "Must be a positive integer";
@@ -132,9 +133,10 @@ async function collectAnswers(): Promise<InitAnswers | undefined> {
 	const completionSignal = await text({
 		message: "Completion signal (the agent emits this to stop the loop)",
 		placeholder: DEFAULT_CONFIG.completionSignal,
+		// No validate: empty input is intentionally allowed so the user can
+		// hit enter to accept `defaultValue`. clack substitutes the default
+		// on finalize, and `stringOr` coerces any stray empty string below.
 		defaultValue: DEFAULT_CONFIG.completionSignal,
-		validate: (value) =>
-			(value ?? "").trim().length === 0 ? "Cannot be empty" : undefined,
 	});
 	if (isCancel(completionSignal)) return cancelAndExit();
 
