@@ -24,25 +24,18 @@ async function pumpFixture(
 	return collected;
 }
 
-describe("streamAgentEvents — OpenAI Responses usage", () => {
-	it("normalizes OpenAI Responses usage from response.completed", async () => {
+describe("streamAgentEvents — Codex turn.completed usage", () => {
+	it("normalizes Codex usage from turn.completed", async () => {
 		const events = await pumpFixture(
 			[
+				{ type: "thread.started", thread_id: "thread_1" },
 				{
-					type: "response.created",
-					response: { model: "gpt-5.3-codex", usage: null },
-				},
-				{
-					type: "response.completed",
-					response: {
-						model: "gpt-5.3-codex",
-						usage: {
-							input_tokens: 1200,
-							input_tokens_details: { cached_tokens: 300 },
-							output_tokens: 90,
-							output_tokens_details: { reasoning_tokens: 12 },
-							total_tokens: 1290,
-						},
+					type: "turn.completed",
+					usage: {
+						input_tokens: 1200,
+						cached_input_tokens: 300,
+						output_tokens: 90,
+						reasoning_output_tokens: 12,
 					},
 				},
 			],
@@ -63,18 +56,14 @@ describe("streamAgentEvents — OpenAI Responses usage", () => {
 		});
 	});
 
-	it("tolerates OpenAI Responses usage without cached-token details", async () => {
+	it("tolerates Codex usage without cached-token details", async () => {
 		const events = await pumpFixture(
 			[
 				{
-					type: "response.completed",
-					response: {
-						model: "gpt-5.5",
-						usage: {
-							input_tokens: 1200,
-							output_tokens: 90,
-							total_tokens: 1290,
-						},
+					type: "turn.completed",
+					usage: {
+						input_tokens: 1200,
+						output_tokens: 90,
 					},
 				},
 			],
@@ -94,19 +83,15 @@ describe("streamAgentEvents — OpenAI Responses usage", () => {
 		});
 	});
 
-	it("feeds OpenAI cached input into cost calculation without double-billing", async () => {
+	it("feeds Codex cached input into cost calculation without double-billing", async () => {
 		const events = await pumpFixture(
 			[
 				{
-					type: "response.completed",
-					response: {
-						model: "gpt-5.3-codex",
-						usage: {
-							input_tokens: 1200,
-							input_tokens_details: { cached_tokens: 300 },
-							output_tokens: 90,
-							total_tokens: 1290,
-						},
+					type: "turn.completed",
+					usage: {
+						input_tokens: 1200,
+						cached_input_tokens: 300,
+						output_tokens: 90,
 					},
 				},
 			],

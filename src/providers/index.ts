@@ -72,9 +72,9 @@ export function codex(model: string): AgentProvider {
 		},
 		parseStreamLine(line: string): readonly ParsedStreamEvent[] {
 			const event = parseJsonLine(line);
-			return event === undefined ? [] : parseCodexEvent(event);
+			return event === undefined ? [] : parseCodexEvent(event, model);
 		},
-		parseSessionUsage: parseOpenAiUsage,
+		parseSessionUsage: parseCodexUsage,
 	};
 }
 
@@ -150,79 +150,47 @@ function parseClaudeEvent(event: unknown): ParsedStreamEvent[] {
 	return [];
 }
 
-function parseCodexEvent(event: unknown): ParsedStreamEvent[] {
+/**
+ * Parse one line of Codex `exec --json` output (Codex CLI >= 0.133),
+ * which emits a thread/turn/item event stream. The stream carries no
+ * model id, so `model` (the requested model) is stamped onto the
+ * terminal `result` event for downstream pricing/display.
+ */
+function parseCodexEvent(event: unknown, model: string): ParsedStreamEvent[] {
 	if (!isRecord(event)) return [];
 
-	if (typeof event.session_id === "string") {
-		return [{ kind: "session_id", sessionId: event.session_id }];
-	}
 	if (event.type === "thread.started" && typeof event.thread_id === "string") {
 		return [{ kind: "session_id", sessionId: event.thread_id }];
 	}
-	if (event.type === "response.created" && isRecord(event.response)) {
-		const response = event.response;
-		const events: ParsedStreamEvent[] = [];
-		if (typeof response.id === "string") {
-			events.push({ kind: "session_id", sessionId: response.id });
-		}
-		if (typeof response.model === "string") {
-			events.push({ kind: "session_id", model: response.model });
-		}
-		return events;
+	if (event.type === "item.completed" && isRecord(event.item)) {
+		return parseCodexItem(event.item);
+	}
+	if (event.type === "turn.completed") {
+		const usage = parseCodexUsage(event.usage);
+		return usage === undefined ? [] : [{ kind: "result", usage, model }];
 	}
 
-	if (
-		(event.type === "response.output_text.delta" ||
-			event.type === "output_text.delta") &&
-		typeof event.delta === "string"
-	) {
-		return [{ kind: "text", text: event.delta }];
-	}
-	if (
-		(event.type === "agent_message" || event.type === "message") &&
-		typeof event.message === "string"
-	) {
-		return [{ kind: "text", text: event.message }];
-	}
-
-	if (event.type === "response.output_item.done" && isRecord(event.item)) {
-		const item = event.item;
-		if (item.type === "function_call") {
-			return [
-				{
-					kind: "tool_call",
-					name: typeof item.name === "string" ? item.name : "tool",
-					input: item.arguments,
-				},
-			];
-		}
-	}
-	if (event.type === "tool_call") {
-		return [
-			{
-				kind: "tool_call",
-				name: typeof event.name === "string" ? event.name : "tool",
-				input: event.arguments ?? event.input,
-			},
-		];
-	}
-
-	if (event.type === "response.completed" && isRecord(event.response)) {
-		const response = event.response;
-		const usage = parseOpenAiUsage(response.usage);
-		const model =
-			typeof response.model === "string" ? response.model : undefined;
-		if (usage === undefined) return [];
-		return [
-			{
-				kind: "result",
-				usage,
-				...(model !== undefined ? { model } : {}),
-			},
-		];
-	}
-
+	// `turn.started`, `item.started`, and `item.updated` carry no payload
+	// we surface — items are rendered once, on `item.completed`.
 	return [];
+}
+
+/** Map a completed Codex thread item to surfaced stream events. */
+function parseCodexItem(item: Record<string, unknown>): ParsedStreamEvent[] {
+	switch (item.type) {
+		case "agent_message":
+			return typeof item.text === "string"
+				? [{ kind: "text", text: item.text }]
+				: [];
+		case "command_execution":
+			return typeof item.command === "string"
+				? [{ kind: "tool_call", name: "shell", input: item.command }]
+				: [];
+		case "file_change":
+			return [{ kind: "tool_call", name: "apply_patch", input: item.changes }];
+		default:
+			return [];
+	}
 }
 
 function parseClaudeUsage(raw: unknown): IterationUsage | undefined {
@@ -239,15 +207,19 @@ function parseClaudeUsage(raw: unknown): IterationUsage | undefined {
 	});
 }
 
-function parseOpenAiUsage(raw: unknown): IterationUsage | undefined {
+/**
+ * Parse Codex `turn.completed` usage. `input_tokens` is the total
+ * prompt size and `cached_input_tokens` a subset of it; we split out
+ * the cache-read portion the way the cost model expects.
+ * `reasoning_output_tokens` is already included in `output_tokens`,
+ * so it is not added again.
+ */
+function parseCodexUsage(raw: unknown): IterationUsage | undefined {
 	if (!isRecord(raw)) return undefined;
 	const totalInputTokens = tokenCountOr(raw.input_tokens, 0);
-	const inputDetails = isRecord(raw.input_tokens_details)
-		? raw.input_tokens_details
-		: undefined;
 	const cacheReadTokens = Math.min(
 		totalInputTokens,
-		tokenCountOr(inputDetails?.cached_tokens, 0),
+		tokenCountOr(raw.cached_input_tokens, 0),
 	);
 	const inputTokens = totalInputTokens - cacheReadTokens;
 	const outputTokens = tokenCountOr(raw.output_tokens, 0);
