@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { followFile, selectRun } from "./daemon.js";
+import { buildChildArgs, followFile, selectRun } from "./daemon.js";
 import type { RunState } from "./state.js";
 
 const ZERO_TOKENS = {

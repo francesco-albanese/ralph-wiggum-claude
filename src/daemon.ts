@@ -88,7 +88,7 @@ export function selectRun(
 	throw new Error("multiple active ralph runs; pass a pid");
 }
 
-function buildChildArgs(args: readonly string[]): string[] {
+export function buildChildArgs(args: readonly string[]): string[] {
 	const [entry, ...rest] = args.slice(1);
 	return [entry ?? "", ...rest.filter((arg) => arg !== "--detach")].filter(
 		(arg) => arg.length > 0,
