@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
-import { followFile, selectRun } from "./daemon.js";
+import { buildChildArgs, followFile, selectRun } from "./daemon.js";
 import type { RunState } from "./state.js";
 
 const ZERO_TOKENS = {
@@ -70,5 +70,46 @@ describe("selectRun", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("buildChildArgs", () => {
+	it("strips --detach but preserves every other run flag for the re-exec", () => {
+		const argv = [
+			"/usr/bin/node",
+			"/path/to/cli.js",
+			"run",
+			"--branch",
+			"feat/x",
+			"--agent",
+			"codex",
+			"--model",
+			"gpt-5.5",
+			"--max-iter",
+			"7",
+			"--detach",
+		];
+		expect(buildChildArgs(argv)).toEqual([
+			"/path/to/cli.js",
+			"run",
+			"--branch",
+			"feat/x",
+			"--agent",
+			"codex",
+			"--model",
+			"gpt-5.5",
+			"--max-iter",
+			"7",
+		]);
+	});
+
+	it("is a no-op on flags when --detach is absent", () => {
+		const argv = ["/usr/bin/node", "/path/to/cli.js", "run", "--branch", "x"];
+		expect(buildChildArgs(argv)).toEqual([
+			"/path/to/cli.js",
+			"run",
+			"--branch",
+			"x",
+		]);
 	});
 });

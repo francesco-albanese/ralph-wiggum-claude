@@ -2,7 +2,7 @@
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { cleanup, createDefaultPorts, formatCleanupReport } from "./cleanup.js";
-import { AGENT_NAMES, type AgentName } from "./config/schema.js";
+import { AGENT_NAMES } from "./config/schema.js";
 import {
 	runDetachedCommand,
 	statusCommand,
@@ -11,75 +11,12 @@ import {
 } from "./daemon.js";
 import { runInit } from "./init/index.js";
 import { runProc } from "./proc.js";
-import { captureRepoRoot, type RunOptions, runCommand } from "./run.js";
-
-const DEFAULT_MAX_ITER = 10;
-const DEFAULT_TIMEOUT_MIN = 30;
-
-export interface RawCliOptions {
-	readonly branch: string;
-	readonly agent?: string;
-	readonly maxIter?: string;
-	readonly timeoutMin?: string;
-	readonly completeSignal?: string;
-	readonly detach?: boolean;
-}
-
-/**
- * Translate raw commander option strings into a validated
- * `RunOptions` shape. Pure so the CLI surface is unit-testable
- * (no real subprocess needed).
- */
-export function parseRunOptions(raw: RawCliOptions): Required<
-	Pick<RunOptions, "branch" | "agent" | "maxIter" | "timeoutMin">
-> & {
-	readonly completeSignal?: RegExp;
-	readonly detach: boolean;
-} {
-	const maxIter =
-		raw.maxIter !== undefined
-			? parsePositiveInt(raw.maxIter, "--max-iter")
-			: DEFAULT_MAX_ITER;
-	const timeoutMin =
-		raw.timeoutMin !== undefined
-			? parsePositiveInt(raw.timeoutMin, "--timeout-min")
-			: DEFAULT_TIMEOUT_MIN;
-	const agent = parseAgent(raw.agent);
-
-	let completeSignal: RegExp | undefined;
-	if (raw.completeSignal !== undefined) {
-		try {
-			completeSignal = new RegExp(raw.completeSignal);
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			throw new Error(`invalid --complete-signal regex: ${msg}`);
-		}
-	}
-
-	const base = {
-		branch: raw.branch,
-		agent,
-		maxIter,
-		timeoutMin,
-		detach: raw.detach === true,
-	};
-	return completeSignal !== undefined ? { ...base, completeSignal } : base;
-}
-
-function parseAgent(value: string | undefined): AgentName {
-	if (value === undefined) return "claude";
-	if ((AGENT_NAMES as readonly string[]).includes(value))
-		return value as AgentName;
-	throw new Error(`--agent must be one of: ${AGENT_NAMES.join(", ")}`);
-}
-
-function parsePositiveInt(value: string, flag: string): number {
-	const n = Number.parseInt(value, 10);
-	if (!Number.isFinite(n) || n <= 0 || String(n) !== value.trim()) {
-		throw new Error(`${flag} must be a positive integer (got ${value})`);
-	}
-	return n;
-}
+import { captureRepoRoot, runCommand } from "./run.js";
+import {
+	parsePositiveInt,
+	type RawCliOptions,
+	resolveRunOptions,
+} from "./run-options.js";
 
 function parseOptionalPid(value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
@@ -110,28 +47,29 @@ program
 	)
 	.option(
 		"--max-iter <n>",
-		"Maximum number of iterations before the invocation stalls",
-		String(DEFAULT_MAX_ITER),
+		"Max iterations before the invocation stalls (overrides ralph.config.json; default 10)",
 	)
 	.option(
 		"--timeout-min <n>",
-		"Per-iteration timeout in minutes (SIGTERMs the agent on hit)",
-		String(DEFAULT_TIMEOUT_MIN),
+		"Per-iteration timeout in minutes; SIGTERMs the agent on hit (default 30)",
 	)
 	.option(
 		"--complete-signal <regex>",
-		"Regex that overrides the default <promise>COMPLETE</promise> sentinel",
+		"Regex overriding the <promise>COMPLETE</promise> sentinel (overrides ralph.config.json)",
 	)
 	.option(
 		"--agent <name>",
-		`Agent provider to run (${AGENT_NAMES.join("|")})`,
-		"claude",
+		`Agent provider to run (${AGENT_NAMES.join("|")}); overrides ralph.config.json`,
 	)
+	.option("--model <id>", "Model id to run; overrides ralph.config.json")
 	.option("--detach", "Run in the background and print pid + log path", false)
 	.action(async (raw: RawCliOptions) => {
 		try {
-			const opts = parseRunOptions(raw);
-			if (opts.detach) {
+			const { detach, ...opts } = await resolveRunOptions({
+				raw,
+				cwd: process.cwd(),
+			});
+			if (detach) {
 				const result = await runDetachedCommand(opts);
 				console.log(`pid=${result.pid} log=${result.logPath}`);
 				return;
