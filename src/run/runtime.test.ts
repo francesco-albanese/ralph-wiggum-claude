@@ -20,7 +20,9 @@ function recordingProvider(
 		qualityGateCommand: "/quality-gate",
 		buildPrintCommand(options?: BuildPrintCommandOptions): PrintCommand {
 			onBuild(options);
-			return { cmd: "true", args: [], env: {} };
+			// `node -e ""` is a no-op that exits 0 on every platform (unlike
+			// `true`, which isn't guaranteed on Windows).
+			return { cmd: process.execPath, args: ["-e", ""], env: {} };
 		},
 		parseStreamLine() {
 			return [];
