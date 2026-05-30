@@ -164,12 +164,23 @@ export async function captureRepoRoot(): Promise<string> {
 }
 
 export function spawnAgent(
-	ctx: AgentContext & { readonly provider: AgentProvider },
+	ctx: AgentContext & {
+		readonly provider: AgentProvider;
+		/**
+		 * The fully-rendered prompt for this iteration. Required: the agent
+		 * runs in `--print` mode and errors out with no input, so omitting
+		 * it is the bug this signature exists to prevent at compile time.
+		 */
+		readonly prompt: string;
+	},
 ): ChildProcess {
-	const command = ctx.provider.buildPrintCommand();
+	const command = ctx.provider.buildPrintCommand({ prompt: ctx.prompt });
 	const child = spawn(command.cmd, [...command.args], {
 		cwd: ctx.cwd,
-		stdio: ["inherit", "pipe", "inherit"],
+		// The prompt is passed as a positional arg (see buildPrintCommand), so
+		// the agent needs no stdin — "ignore" keeps it from consuming the
+		// parent TTY. stdout is piped for the JSONL stream; stderr inherited.
+		stdio: ["ignore", "pipe", "inherit"],
 		env: buildAgentEnvironment(command),
 	});
 

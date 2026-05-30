@@ -1,8 +1,13 @@
+import { join } from "node:path";
 import { parseBranch } from "./branch.js";
 import { DEFAULT_CONFIG } from "./config/defaults.js";
 import type { AgentName } from "./config/schema.js";
 import { addUsage, EMPTY_USAGE } from "./cost.js";
 import { runIteration } from "./iteration.js";
+import {
+	loadAndRenderPrompt,
+	type PromptContext,
+} from "./prompt/preprocessor.js";
 import { createAgentProvider } from "./providers.js";
 import {
 	createDefaultQualityGatePorts,
@@ -43,6 +48,13 @@ export interface RunOptions {
 
 const DEFAULT_MAX_ITER = 10;
 const DEFAULT_TIMEOUT_MIN = 30;
+/**
+ * Prompt the agent loop renders each iteration, relative to the worktree.
+ * Mirrors `RALPH_PATHS.prompt` in `src/init/plan.ts`; kept local so the run
+ * path doesn't depend on the init module (log.ts / state.ts hardcode their
+ * own `.ralph/...` subpaths the same way).
+ */
+const PROMPT_PATH = ".ralph/prompt.md";
 
 export type RunCommandResult = {
 	readonly outcome: "complete" | "stalled" | "interrupted";
@@ -149,14 +161,24 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 			signal: shutdown.signal,
 			forceSignal: shutdown.forceSignal,
 			agent: async ({ cwd, signal, forceSignal }) => {
+				const promptPath = join(cwd, PROMPT_PATH);
+				const promptContext: PromptContext = {
+					branch: opts.branch,
+					targetBranch: baseBranch,
+				};
 				const wrappedRunIteration = pricedRunIteration({
 					display,
 					log: structuredLog,
 					cost,
 					maxIter,
-					spawnRunIteration: (consume) =>
-						runIteration({
-							spawn: () => spawnAgent({ cwd, signal, forceSignal, provider }),
+					// Re-render the prompt every iteration: it carries shell
+					// directives (e.g. `git log {{TARGET_BRANCH}}..HEAD`) that must
+					// reflect fresh repo state, expanded in the worktree `cwd`.
+					spawnRunIteration: async (consume) => {
+						const prompt = await loadAndRenderPrompt(promptPath, promptContext);
+						return runIteration({
+							spawn: () =>
+								spawnAgent({ cwd, signal, forceSignal, provider, prompt }),
 							out: process.stdout,
 							timeoutMs,
 							consume,
@@ -164,7 +186,8 @@ export async function runCommand(opts: RunOptions): Promise<RunCommandResult> {
 								? { completeSignal: opts.completeSignal }
 								: {}),
 							provider,
-						}),
+						});
+					},
 					onIterationDone: (_iteration, result) => {
 						totalUsage = addUsage(totalUsage, result.usage);
 						if (result.model !== undefined) model = result.model;
