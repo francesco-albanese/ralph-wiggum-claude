@@ -131,7 +131,7 @@ function parseAgent(value: string | undefined): AgentName | undefined {
 	throw new Error(`--agent must be one of: ${AGENT_NAMES.join(", ")}`);
 }
 
-function parsePositiveInt(value: string, flag: string): number {
+export function parsePositiveInt(value: string, flag: string): number {
 	const n = Number.parseInt(value, 10);
 	if (!Number.isFinite(n) || n <= 0 || String(n) !== value.trim()) {
 		throw new Error(`${flag} must be a positive integer (got ${value})`);

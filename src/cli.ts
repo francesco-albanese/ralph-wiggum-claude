@@ -12,15 +12,11 @@ import {
 import { runInit } from "./init/index.js";
 import { runProc } from "./proc.js";
 import { captureRepoRoot, runCommand } from "./run.js";
-import { type RawCliOptions, resolveRunOptions } from "./run-options.js";
-
-function parsePositiveInt(value: string, flag: string): number {
-	const n = Number.parseInt(value, 10);
-	if (!Number.isFinite(n) || n <= 0 || String(n) !== value.trim()) {
-		throw new Error(`${flag} must be a positive integer (got ${value})`);
-	}
-	return n;
-}
+import {
+	parsePositiveInt,
+	type RawCliOptions,
+	resolveRunOptions,
+} from "./run-options.js";
 
 function parseOptionalPid(value: string | undefined): number | undefined {
 	if (value === undefined) return undefined;
