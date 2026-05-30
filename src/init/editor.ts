@@ -12,8 +12,10 @@ import { note } from "@clack/prompts";
  * (Sublime) is the user's responsibility to bake into `$EDITOR`.
  */
 export async function openInEditor(path: string): Promise<void> {
-	const editor = process.env.EDITOR ?? process.env.VISUAL;
-	if (editor === undefined || editor.trim().length === 0) {
+	// `||` (not `??`) so a blank `EDITOR=` falls through to `$VISUAL`; trim
+	// first so a whitespace-only value counts as unset too.
+	const editor = process.env.EDITOR?.trim() || process.env.VISUAL?.trim();
+	if (editor === undefined || editor.length === 0) {
 		note(
 			`No $EDITOR set — open ${path} manually to tailor the prompt.`,
 			"editor",
