@@ -1,5 +1,8 @@
-{"type":"response.created","response":{"id":"resp_1","model":"gpt-5.3-codex","usage":null}}
+{"type":"thread.started","thread_id":"thread_codex_1"}
 not-json
-{"type":"response.output_text.delta","delta":"Inspecting."}
-{"type":"response.output_item.done","item":{"type":"function_call","name":"shell","arguments":{"cmd":"bd ready"}}}
-{"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.3-codex","usage":{"input_tokens":1200,"input_tokens_details":{"cached_tokens":300},"output_tokens":80,"total_tokens":1280}}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"echo hi","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"echo hi","aggregated_output":"hi\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"src/main.js","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Implemented the playfield."}}
+{"type":"turn.completed","usage":{"input_tokens":1200,"cached_input_tokens":300,"output_tokens":80,"reasoning_output_tokens":10}}

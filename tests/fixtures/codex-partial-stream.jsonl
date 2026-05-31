@@ -1,2 +1,4 @@
-{"type":"response.created","response":{"id":"resp_2","model":"gpt-5.3-codex","usage":null}}
-{"type":"response.output_text.delta","delta":"Partial only."}
+{"type":"thread.started","thread_id":"thread_codex_2"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Working on the bead."}}
+not-json

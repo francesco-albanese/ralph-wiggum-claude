@@ -110,8 +110,12 @@ describe("spawnQualityGateAgent", () => {
 
 		child.stdout?.write(
 			`${JSON.stringify({
-				type: "response.output_text.delta",
-				delta: "<ralph-qg>{}</ralph-qg>",
+				type: "item.completed",
+				item: {
+					id: "item_0",
+					type: "agent_message",
+					text: "<ralph-qg>{}</ralph-qg>",
+				},
 			})}\n`,
 		);
 		child.stdout?.end();

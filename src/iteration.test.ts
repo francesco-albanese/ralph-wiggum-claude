@@ -202,8 +202,8 @@ describe("runIteration", () => {
 
 		child.emitStdout(
 			`${JSON.stringify({
-				type: "response.output_text.delta",
-				delta: "done from codex",
+				type: "item.completed",
+				item: { id: "item_0", type: "agent_message", text: "done from codex" },
 			})}\n`,
 		);
 		child.finish(0);
