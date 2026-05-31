@@ -187,7 +187,9 @@ function parseCodexItem(item: Record<string, unknown>): ParsedStreamEvent[] {
 				? [{ kind: "tool_call", name: "shell", input: item.command }]
 				: [];
 		case "file_change":
-			return [{ kind: "tool_call", name: "apply_patch", input: item.changes }];
+			return Array.isArray(item.changes)
+				? [{ kind: "tool_call", name: "apply_patch", input: item.changes }]
+				: [];
 		default:
 			return [];
 	}
