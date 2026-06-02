@@ -26,9 +26,21 @@ _Avoid_: "loop", "run" (ambiguous with **invocation**), "cycle"
 One `ralph` CLI call. Contains up to N **iterations** (default 10). Produces one **branch** and one **PR**.
 _Avoid_: "run" alone, "session" alone
 
+**Worker**:
+One parallel Ralph lane. Each **worker** owns one **invocation**, one **source branch**, one **worktree**, and one **PR**.
+_Avoid_: "workstream", "lane" in user-facing docs
+
+**Fixed worker swarm**:
+A swarm where Ralph starts exactly N **workers** and each **worker** loops independently until **no-claim exit**, **stall**, crash, or interruption. Ralph does not dynamically create replacement workers after individual **beads** complete.
+_Avoid_: "worker pool", "dynamic pool"
+
 **Bead**:
 A task in the local `bd` database. The unit of work an **iteration** picks up via `bd ready`.
 _Avoid_: "task" (overloaded), "issue", "ticket"
+
+**Claimed bead**:
+A **bead** that Ralph assigns to a **worker** before launching an **agent** **iteration** in swarm mode. The **agent** must work only on the **claimed bead**.
+_Avoid_: "selected task", "reserved issue"
 
 **Active epic**:
 The open `bd` epic that owns the **beads** Ralph is working through. Hosts the per-iteration progress log (comments) and evergreen Codebase Patterns (notes).
@@ -38,9 +50,17 @@ _Avoid_: "PRD", "milestone", "story"
 The string `<promise>COMPLETE</promise>` emitted by the **agent** to signal "no more beads ready, stop the **invocation**." Overridable per run via `--complete-signal`.
 _Avoid_: "done flag", "exit signal", "promise"
 
+**No-claim exit**:
+The worker terminal path in swarm mode when Ralph cannot claim a ready **bead** for that **worker**. The **worker** exits without launching an **agent** **iteration**.
+_Avoid_: "empty completion", "idle run"
+
 **Stall**:
 The terminal state when `--max-iter` is reached without the **completion signal**. The **PR** stays draft; WhatsApp warns.
 _Avoid_: "fail", "timeout" (different concept — see **iteration timeout**)
+
+**Swarm outcome**:
+The aggregate terminal state for a set of **workers**. It is the worst **worker** outcome: all complete means COMPLETE; any stalled worker means STALLED; any crashed **iteration** contributes to STALLED with `crash-rate`; any interrupted worker means INTERRUPTED.
+_Avoid_: "swarm status", "overall result"
 
 **Iteration timeout**:
 The hard wall-clock limit on a single **iteration** (default 30 min). Hitting it kills the agent subprocess and moves to the next iteration without exiting the **invocation**.
@@ -59,6 +79,10 @@ _Avoid_: "worktree mode"
 **Source branch**:
 The branch the **agent** commits to during the **invocation** — derived from `--branch`.
 _Avoid_: "working branch", "agent branch"
+
+**Worker source branch**:
+A **source branch** derived from the parent **source branch** for one **worker** by appending a deterministic worker suffix such as `-w1`.
+_Avoid_: "child branch", "sub-branch"
 
 **Target branch**:
 The host's active branch at `ralph` invocation time — the merge target for the **PR**.
@@ -88,6 +112,10 @@ _Avoid_: "review pass", "final check"
 The rich plain-text message sent via CallMeBot at COMPLETE or stall. Includes status, project, branch, PR URL, iteration/time, tasks (done + blocked), tokens + cost, brief task summary, QG findings line.
 _Avoid_: "notification", "ping"
 
+**Swarm WhatsApp message**:
+A single aggregate **WhatsApp message** sent after all **workers** finish, listing the **swarm outcome**, worker count, worker PR URLs, and any stalled or interrupted workers.
+_Avoid_: "per-worker notifications", "message storm"
+
 **State file**:
 A JSON file under `.ralph/state/<pid>.json` describing a running **invocation**: branch, started-at, current iteration, current bead, cumulative cost. Read by `ralph status`; deleted on clean exit.
 _Avoid_: "PID file" (the PID is one field; the state is more)
@@ -100,7 +128,12 @@ _Avoid_: "background", "nohup mode"
 
 - A **Ralph** **invocation** runs N **iterations** until **completion signal** or **stall** or **iteration timeout** exhaustion.
 - Each **iteration** spawns one fresh **agent** process via an **agent provider**, with the **prompt** re-expanded for that iteration.
-- The **agent** picks one **bead**, implements it, and pushes one or more commits to the **source branch**.
+- Each **worker** keeps the same fresh-per-**iteration** semantics; it does not keep a persistent **agent** thread between **iterations**.
+- In a single-worker **invocation**, the **agent** picks one **bead**, implements it, and pushes one or more commits to the **source branch**.
+- In a swarm, Ralph claims one **bead** for a **worker** before launching that worker's **agent** **iteration**; the **agent** works only on the **claimed bead**.
+- In a swarm, a **worker** uses **no-claim exit** when Ralph cannot claim a ready **bead** for it.
+- A swarm is a **fixed worker swarm**: Ralph starts exactly N **workers**, and each **worker** loops independently until it reaches a terminal state.
+- In a swarm, each **worker** uses a deterministic **worker source branch** such as `feat/example-w1`.
 - One **invocation** → one **source branch** → one **PR**. Draft after iteration 1, marked ready after **QG** finishes at COMPLETE.
 - The **QG** is a separate agent invocation (fresh context) — it reviews the full PR diff, not just one iteration's diff.
 - **Detached mode** writes a **state file**; `ralph status` reads it; `ralph stop` sends SIGTERM to the PID inside.
