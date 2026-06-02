@@ -18,6 +18,7 @@ export type ShellResult = {
 };
 
 export type RunShellOptions = {
+	readonly cwd?: string;
 	readonly maxOutputBytes?: number;
 	readonly timeoutMs?: number;
 };
