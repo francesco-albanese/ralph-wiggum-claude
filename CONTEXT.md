@@ -59,7 +59,7 @@ The terminal state when `--max-iter` is reached without the **completion signal*
 _Avoid_: "fail", "timeout" (different concept — see **iteration timeout**)
 
 **Swarm outcome**:
-The aggregate terminal state for a set of **workers**. It is the worst **worker** outcome: all complete means COMPLETE; any stalled worker means STALLED unless another worker crashed or was interrupted; any crashed worker means FAILED; any interrupted worker means INTERRUPTED.
+The aggregate terminal state for a set of **workers**. It is the worst **worker** outcome: all complete means COMPLETE; any stalled worker means STALLED; any crashed **iteration** contributes to STALLED with `crash-rate`; any interrupted worker means INTERRUPTED.
 _Avoid_: "swarm status", "overall result"
 
 **Iteration timeout**:
@@ -113,7 +113,7 @@ The rich plain-text message sent via CallMeBot at COMPLETE or stall. Includes st
 _Avoid_: "notification", "ping"
 
 **Swarm WhatsApp message**:
-A single aggregate **WhatsApp message** sent after all **workers** finish, listing the **swarm outcome**, worker count, worker PR URLs, and any stalled or failed workers.
+A single aggregate **WhatsApp message** sent after all **workers** finish, listing the **swarm outcome**, worker count, worker PR URLs, and any stalled or interrupted workers.
 _Avoid_: "per-worker notifications", "message storm"
 
 **State file**:
