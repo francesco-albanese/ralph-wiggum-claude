@@ -13,6 +13,7 @@ export const defaultShellRunner: RunShell = (cmd, opts) => {
 	return new Promise<ShellResult>((resolve) => {
 		const child = spawn("/bin/sh", ["-c", cmd], {
 			stdio: ["ignore", "pipe", "pipe"],
+			...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
 		});
 
 		const stdoutChunks: Buffer[] = [];
